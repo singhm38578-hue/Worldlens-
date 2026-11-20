@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { MAX_IMAGE_FILE_BYTES, validateImageFile } from './imageEncoder';
+import {
+  IMAGE_COMPRESSION_PROFILES,
+  MAX_IMAGE_FILE_BYTES,
+  computeTargetDimensions,
+  validateImageFile,
+} from './imageEncoder';
 
 describe('validateImageFile — Camera & Gallery Input Validation', () => {
   it('accepts JPEG, PNG, WebP, HEIC/HEIF, BMP, and GIF images', () => {
@@ -54,6 +59,26 @@ describe('validateImageFile — Camera & Gallery Input Validation', () => {
         size: MAX_IMAGE_FILE_BYTES + 1,
       }),
       { ok: false, reason: 'file-too-large' }
+    );
+  });
+});
+
+describe('computeTargetDimensions — Gemini Upload Resize Profiles', () => {
+  it('downscales 4000x3000 photos to 768x576 for scan and 1024x768 for OCR without upscaling small photos', () => {
+    assert.deepEqual(
+      computeTargetDimensions(4000, 3000, IMAGE_COMPRESSION_PROFILES.scan.maxDimensionPx),
+      { width: 768, height: 576 }
+    );
+
+    assert.deepEqual(
+      computeTargetDimensions(4000, 3000, IMAGE_COMPRESSION_PROFILES.ocr.maxDimensionPx),
+      { width: 1024, height: 768 }
+    );
+
+    // Small images are preserved without upscaling
+    assert.deepEqual(
+      computeTargetDimensions(500, 400, IMAGE_COMPRESSION_PROFILES.scan.maxDimensionPx),
+      { width: 500, height: 400 }
     );
   });
 });

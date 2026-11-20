@@ -40,6 +40,21 @@ test('validateTranslationInput keeps short English and Hindi inputs in one chunk
   }
 });
 
+test('validateTranslationInput keeps medium-long text up to 3,500 chars in 1 single Gemini chunk', () => {
+  const mediumText = 'WorldLens translates signs and documents cleanly. '.repeat(60).trim(); // ~3,000 chars
+  assert.ok(mediumText.length > 1800 && mediumText.length <= TRANSLATION_CHUNK_SIZE_CHARS);
+
+  const validation = validateTranslationInput(mediumText);
+  assert.equal(validation.status, 'valid');
+  if (validation.status === 'valid') {
+    assert.equal(
+      validation.chunks.length,
+      1,
+      'Expected ~3,000-char text to require only 1 API call instead of 2'
+    );
+  }
+});
+
 test('splitTextIntoSafeChunks splits long multi-paragraph Hindi and English text cleanly', () => {
   const paragraph =
     'WorldLens helps people read signs, menus, manuals, and everyday notes across languages. ' +
@@ -52,7 +67,7 @@ test('splitTextIntoSafeChunks splits long multi-paragraph Hindi and English text
   const validation = validateTranslationInput(longText);
   assert.equal(validation.status, 'valid');
   if (validation.status === 'valid') {
-    assert.ok(validation.chunks.length >= 2);
+    assert.equal(validation.chunks.length, 2);
     for (const chunk of validation.chunks) {
       assert.ok(chunk.length > 0);
       assert.ok(chunk.length <= TRANSLATION_CHUNK_SIZE_CHARS);

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   AlertTriangle,
+  BarChart3,
   Check,
   ChevronRight,
   Cloud,
@@ -19,6 +20,11 @@ import type { User } from 'firebase/auth';
 import type { AppLanguage } from '../domain/models';
 import type { AppStrings } from '../data/localization';
 import { APP_BUILD, APP_VERSION } from '../data/localHistoryStore';
+import {
+  getTopUsageFeature,
+  type LocalAiUsageStats,
+  type TrackedAiFeature,
+} from '../data/usageTracker';
 
 interface ProfileScreenProps {
   language: AppLanguage;
@@ -34,6 +40,8 @@ interface ProfileScreenProps {
   translationHistoryCount: number;
   historyStorageError?: string | null;
   onDismissStorageError?: () => void;
+  usageStats: LocalAiUsageStats;
+  onResetUsageStats: () => void;
   onLanguageChange: (language: AppLanguage) => void;
   onClearAllLocalHistory: () => void;
   onOpenAbout: () => void;
@@ -56,6 +64,8 @@ export function ProfileScreen({
   translationHistoryCount,
   historyStorageError,
   onDismissStorageError,
+  usageStats,
+  onResetUsageStats,
   onLanguageChange,
   onClearAllLocalHistory,
   onOpenAbout,
@@ -67,6 +77,36 @@ export function ProfileScreen({
   const [clearedNoticeVisible, setClearedNoticeVisible] = useState(false);
   const totalHistoryCount = scanHistoryCount + translationHistoryCount;
   const isSignedIn = Boolean(user);
+
+  const featureLabels: Record<TrackedAiFeature, string> = {
+    vision_scan: language === 'hi' ? 'स्मार्ट स्कैनर' : 'Smart Scanner',
+    text_translate: language === 'hi' ? 'टेक्स्ट अनुवादक' : 'Text Translator',
+    camera_translate: language === 'hi' ? 'कैमरा अनुवादक' : 'Camera Translator',
+    voice_translate: language === 'hi' ? 'वॉइस अनुवादक' : 'Voice Translator',
+    conversation_translate: language === 'hi' ? 'वार्तालाप अनुवादक' : 'Conversation',
+  };
+
+  const featureKeys: TrackedAiFeature[] = [
+    'vision_scan',
+    'text_translate',
+    'camera_translate',
+    'voice_translate',
+    'conversation_translate',
+  ];
+
+  const totalApiCalls = featureKeys.reduce(
+    (sum, key) => sum + usageStats.features[key].apiCalls,
+    0
+  );
+  const totalCacheHits = featureKeys.reduce(
+    (sum, key) => sum + usageStats.features[key].cacheHits,
+    0
+  );
+  const totalQuotaErrors = featureKeys.reduce(
+    (sum, key) => sum + usageStats.features[key].quotaErrors,
+    0
+  );
+  const topFeature = getTopUsageFeature(usageStats);
 
   const historySummary = isSignedIn
     ? language === 'hi'
@@ -429,6 +469,86 @@ export function ProfileScreen({
               </span>
               <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
             </button>
+          </section>
+
+          {/* AI Request Usage & Quota Summary */}
+          <section className="rounded-3xl bg-white border border-slate-200/90 p-5 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-[#EEF4FF] text-[#1A6BFF] flex items-center justify-center shrink-0">
+                  <BarChart3 className="w-5 h-5" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base font-bold text-[#071428]">
+                    {strings.settingsUsageTitle}
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                    {strings.settingsUsageSubtitle}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={totalApiCalls === 0 && totalCacheHits === 0 && totalQuotaErrors === 0}
+                onClick={onResetUsageStats}
+                className="min-h-[34px] px-3 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-semibold text-slate-600 shrink-0"
+              >
+                {strings.settingsUsageResetBtn}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2.5">
+              <div className="rounded-2xl bg-[#F6F8FC] border border-slate-200/70 p-3">
+                <p className="text-[11px] text-slate-500">
+                  {language === 'hi' ? 'API कॉल' : 'API Calls'}
+                </p>
+                <p className="mt-1 text-lg font-bold text-[#071428] font-mono tabular-nums">
+                  {totalApiCalls}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-[#F6F8FC] border border-slate-200/70 p-3">
+                <p className="text-[11px] text-slate-500">
+                  {language === 'hi' ? 'कैश बचत' : 'Cache Saved'}
+                </p>
+                <p className="mt-1 text-lg font-bold text-[#1A6BFF] font-mono tabular-nums">
+                  {totalCacheHits}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-[#F6F8FC] border border-slate-200/70 p-3">
+                <p className="text-[11px] text-slate-500">
+                  {language === 'hi' ? 'कोटा त्रुटियाँ' : '429 Limits'}
+                </p>
+                <p className="mt-1 text-lg font-bold text-slate-700 font-mono tabular-nums">
+                  {totalQuotaErrors}
+                </p>
+              </div>
+            </div>
+
+            <div className="divide-y divide-slate-100 text-xs">
+              {featureKeys.map((key) => {
+                const rec = usageStats.features[key];
+                const isTop = topFeature === key && rec.apiCalls > 0;
+                return (
+                  <div
+                    key={key}
+                    className="py-2 first:pt-0 last:pb-0 flex items-center justify-between gap-2"
+                  >
+                    <span className="font-medium text-[#071428] truncate">
+                      {featureLabels[key]}
+                      {isTop ? (language === 'hi' ? ' (शीर्ष)' : ' (Top)') : ''}
+                    </span>
+                    <span className="font-mono tabular-nums text-slate-500 shrink-0">
+                      {rec.apiCalls} {language === 'hi' ? 'कॉल' : 'calls'}
+                      {rec.cacheHits > 0 ? ` · ${rec.cacheHits} ${language === 'hi' ? 'कैश' : 'cached'}` : ''}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <p className="text-[11px] font-mono text-slate-500 truncate">
+              {language === 'hi' ? 'मॉडल' : 'Model'}: {usageStats.lastModelUsed || 'gemini-3.1-flash-lite'}
+            </p>
           </section>
 
           {/* App Version Information */}

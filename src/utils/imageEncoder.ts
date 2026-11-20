@@ -1,5 +1,30 @@
-const MAX_DIMENSION_PX = 1024;
-const JPEG_QUALITY = 0.86;
+export type ImageCompressionProfile = 'scan' | 'ocr';
+
+export const IMAGE_COMPRESSION_PROFILES: Record<
+  ImageCompressionProfile,
+  {
+    maxDimensionPx: number;
+    jpegQuality: number;
+    fallbackQuality: number;
+    maxBase64Chars: number;
+  }
+> = {
+  // 768px @ 0.78 preserves visual details for object/plant/landmark recognition
+  // while cutting Gemini image tokens and upload payload ~40–60% vs 1024px @ 0.86.
+  scan: {
+    maxDimensionPx: 768,
+    jpegQuality: 0.78,
+    fallbackQuality: 0.66,
+    maxBase64Chars: 240_000,
+  },
+  // 1024px @ 0.80 keeps small sign/menu text crisp for accurate OCR translation.
+  ocr: {
+    maxDimensionPx: 1024,
+    jpegQuality: 0.8,
+    fallbackQuality: 0.7,
+    maxBase64Chars: 360_000,
+  },
+};
 
 export const MAX_IMAGE_FILE_BYTES = 25 * 1024 * 1024; // 25 MB safety cap
 
@@ -34,6 +59,22 @@ export interface ImageFileLike {
   name: string;
   type: string;
   size: number;
+}
+
+export function computeTargetDimensions(
+  naturalWidth: number,
+  naturalHeight: number,
+  maxDimensionPx: number
+): { width: number; height: number } {
+  if (naturalWidth <= 0 || naturalHeight <= 0) {
+    return { width: 0, height: 0 };
+  }
+  const longest = Math.max(naturalWidth, naturalHeight);
+  const scale = longest > maxDimensionPx ? maxDimensionPx / longest : 1;
+  return {
+    width: Math.max(1, Math.round(naturalWidth * scale)),
+    height: Math.max(1, Math.round(naturalHeight * scale)),
+  };
 }
 
 /**
@@ -72,14 +113,22 @@ export function validateImageFile(file: ImageFileLike): ImageFileValidationResul
 export interface EncodedImagePayload {
   imageBase64: string;
   mimeType: 'image/jpeg';
+  width: number;
+  height: number;
+  estimatedBytes: number;
 }
 
 /**
- * Decodes a selected image URI safely and downscales to at most 1024px on the
- * longest edge before sending to the server-side Gemini endpoint, preventing
- * excessive memory usage or oversized payloads.
+ * Decodes a selected image URI safely and downscales + compresses it according to
+ * the target profile ('scan' or 'ocr') before sending to the server-side Gemini endpoint.
+ * Automatically steps down JPEG quality if a highly detailed image exceeds the base64 budget.
  */
-export function decodeAndResizeImageUri(uri: string): Promise<EncodedImagePayload> {
+export function decodeAndResizeImageUri(
+  uri: string,
+  profile: ImageCompressionProfile = 'scan'
+): Promise<EncodedImagePayload> {
+  const cfg = IMAGE_COMPRESSION_PROFILES[profile];
+
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -88,15 +137,15 @@ export function decodeAndResizeImageUri(uri: string): Promise<EncodedImagePayloa
       try {
         const naturalWidth = img.naturalWidth || img.width;
         const naturalHeight = img.naturalHeight || img.height;
-        if (naturalWidth <= 0 || naturalHeight <= 0) {
+        const { width: targetW, height: targetH } = computeTargetDimensions(
+          naturalWidth,
+          naturalHeight,
+          cfg.maxDimensionPx
+        );
+        if (targetW <= 0 || targetH <= 0) {
           reject(new Error('INVALID_IMAGE'));
           return;
         }
-
-        const longest = Math.max(naturalWidth, naturalHeight);
-        const scale = longest > MAX_DIMENSION_PX ? MAX_DIMENSION_PX / longest : 1;
-        const targetW = Math.max(1, Math.round(naturalWidth * scale));
-        const targetH = Math.max(1, Math.round(naturalHeight * scale));
 
         const canvas = document.createElement('canvas');
         canvas.width = targetW;
@@ -107,15 +156,21 @@ export function decodeAndResizeImageUri(uri: string): Promise<EncodedImagePayloa
           return;
         }
 
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, targetW, targetH);
-        const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
-        const commaIndex = dataUrl.indexOf(',');
-        if (commaIndex === -1) {
-          reject(new Error('INVALID_IMAGE'));
-          return;
+
+        const encodeAtQuality = (quality: number): string => {
+          const dataUrl = canvas.toDataURL('image/jpeg', quality);
+          const commaIndex = dataUrl.indexOf(',');
+          return commaIndex === -1 ? '' : dataUrl.slice(commaIndex + 1);
+        };
+
+        let imageBase64 = encodeAtQuality(cfg.jpegQuality);
+        if (imageBase64.length > cfg.maxBase64Chars) {
+          imageBase64 = encodeAtQuality(cfg.fallbackQuality);
         }
 
-        const imageBase64 = dataUrl.slice(commaIndex + 1);
         if (!imageBase64) {
           reject(new Error('INVALID_IMAGE'));
           return;
@@ -124,6 +179,9 @@ export function decodeAndResizeImageUri(uri: string): Promise<EncodedImagePayloa
         resolve({
           imageBase64,
           mimeType: 'image/jpeg',
+          width: targetW,
+          height: targetH,
+          estimatedBytes: Math.round((imageBase64.length * 3) / 4),
         });
       } catch {
         reject(new Error('INVALID_IMAGE'));
@@ -161,15 +219,15 @@ export function createSafeThumbnailDataUrl(uri: string): Promise<string | undefi
       try {
         const naturalWidth = img.naturalWidth || img.width;
         const naturalHeight = img.naturalHeight || img.height;
-        if (naturalWidth <= 0 || naturalHeight <= 0) {
+        const { width: targetW, height: targetH } = computeTargetDimensions(
+          naturalWidth,
+          naturalHeight,
+          THUMBNAIL_MAX_DIM_PX
+        );
+        if (targetW <= 0 || targetH <= 0) {
           resolve(undefined);
           return;
         }
-
-        const longest = Math.max(naturalWidth, naturalHeight);
-        const scale = longest > THUMBNAIL_MAX_DIM_PX ? THUMBNAIL_MAX_DIM_PX / longest : 1;
-        const targetW = Math.max(1, Math.round(naturalWidth * scale));
-        const targetH = Math.max(1, Math.round(naturalHeight * scale));
 
         const canvas = document.createElement('canvas');
         canvas.width = targetW;
@@ -199,4 +257,3 @@ export function createSafeThumbnailDataUrl(uri: string): Promise<string | undefi
     img.src = uri;
   });
 }
-

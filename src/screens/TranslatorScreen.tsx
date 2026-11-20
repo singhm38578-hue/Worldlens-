@@ -53,12 +53,24 @@ import {
   loadTranslationHistory,
   saveTranslationHistoryItem,
 } from '../data/localHistoryStore';
+import {
+  recordAiUsageEvent,
+  type TrackedAiFeature,
+} from '../data/usageTracker';
+
+const TEXT_TRANSLATE_TIMEOUT_MS = 28_000;
+const CAMERA_TRANSLATE_TIMEOUT_MS = 32_000;
+const TRANSLATION_CACHE_TTL_MS = 10 * 60 * 1000;
+const TRANSLATION_CACHE_MAX_ENTRIES = 50;
 
 interface TranslatorScreenProps {
   language: AppLanguage;
   strings: AppStrings;
   scannerSelectedImage?: SelectedScanImage | null;
   translationHistory?: LocalTranslationRecord[];
+  quotaCooldownSeconds?: number;
+  onQuotaExceeded?: (retryAfterSeconds?: number) => void;
+  onUsageUpdated?: () => void;
   onSaveTranslation?: (record: Omit<LocalTranslationRecord, 'id' | 'timestamp'>) => void;
   onDeleteTranslation?: (id: string) => void;
   onClearTranslations?: () => void;
@@ -126,6 +138,9 @@ export function TranslatorScreen({
   strings,
   scannerSelectedImage = null,
   translationHistory: externalHistory,
+  quotaCooldownSeconds = 0,
+  onQuotaExceeded,
+  onUsageUpdated,
   onSaveTranslation,
   onDeleteTranslation,
   onClearTranslations,
@@ -158,6 +173,7 @@ export function TranslatorScreen({
   const [cameraImageOwned, setCameraImageOwned] = useState(false);
   const [cameraResult, setCameraResult] = useState<CameraTranslationOutput | null>(null);
   const [isTranslatingCamera, setIsTranslatingCamera] = useState(false);
+  const [cameraStage, setCameraStage] = useState<'idle' | 'compressing' | 'translating'>('idle');
   const [cameraError, setCameraError] = useState<TranslatorError | null>(null);
   const [cameraModalOpen, setCameraModalOpen] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
@@ -192,12 +208,22 @@ export function TranslatorScreen({
   const historyRecords = externalHistory ?? internalHistory;
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Refs for camera & speech cleanup
+  // Refs for camera, speech cleanup, synchronous in-flight locks, and bounded session caches
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
   const fallbackCameraInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const textInFlightRef = useRef<boolean>(false);
+  const cameraInFlightRef = useRef<boolean>(false);
+  const voiceInFlightRef = useRef<boolean>(false);
+  const convInFlightRef = useRef<boolean>(false);
+  const textCacheRef = useRef<
+    Map<string, { data: TextTranslationOutput; expiresAt: number }>
+  >(new Map());
+  const cameraCacheRef = useRef<
+    Map<string, { data: CameraTranslationOutput; expiresAt: number }>
+  >(new Map());
 
   const speechSupported = useMemo(() => getSpeechRecognitionCtor() !== null, []);
 
@@ -264,7 +290,7 @@ export function TranslatorScreen({
       translatedText: prefillTranslation.translatedText,
       detectedSourceLanguage: prefillTranslation.sourceLanguageName,
       targetLanguageName: prefillTranslation.targetLanguageName,
-      modelName: 'gemini-4-hydrogen',
+      modelName: 'gemini-3.1-flash-lite',
     });
     setTextError(null);
     setActiveTab('text');
@@ -363,11 +389,74 @@ export function TranslatorScreen({
     async (
       text: string,
       src: TranslatorLanguage,
-      tgt: TranslatorLanguage
+      tgt: TranslatorLanguage,
+      featureMode: 'text' | 'voice' | 'conversation' = 'text'
     ): Promise<{ ok: true; data: TextTranslationOutput } | { ok: false; error: TranslatorError }> => {
+      const trackedFeature: TrackedAiFeature =
+        featureMode === 'voice'
+          ? 'voice_translate'
+          : featureMode === 'conversation'
+            ? 'conversation_translate'
+            : 'text_translate';
+
+      if (quotaCooldownSeconds > 0) {
+        return { ok: false, error: { type: 'QUOTA_EXCEEDED' } };
+      }
+
+      // Zero-cost local short-circuit when source and target are explicitly the same language
+      if (src.code !== AUTO_DETECT_LANGUAGE.code && src.code === tgt.code) {
+        recordAiUsageEvent({
+          feature: trackedFeature,
+          cached: true,
+          latencyMs: 0,
+          modelName: 'local-passthrough',
+        });
+        onUsageUpdated?.();
+        return {
+          ok: true,
+          data: {
+            sourceText: text,
+            translatedText: text,
+            detectedSourceLanguage: src.name,
+            targetLanguageName: tgt.name,
+            modelName: 'local-passthrough',
+            cached: true,
+          },
+        };
+      }
+
+      // Check bounded client session cache to avoid redundant Gemini requests
+      const cacheKey = `${src.code}|${tgt.code}|${text}`;
+      const cachedEntry = textCacheRef.current.get(cacheKey);
+      if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
+        recordAiUsageEvent({
+          feature: trackedFeature,
+          cached: true,
+          latencyMs: 0,
+          modelName: cachedEntry.data.modelName,
+        });
+        onUsageUpdated?.();
+        return {
+          ok: true,
+          data: { ...cachedEntry.data, cached: true },
+        };
+      }
+      if (cachedEntry) {
+        textCacheRef.current.delete(cacheKey);
+      }
+
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
         return { ok: false, error: { type: 'NETWORK' } };
       }
+
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      let timedOut = false;
+      const timeoutId = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, TEXT_TRANSLATE_TIMEOUT_MS);
+
       try {
         const res = await fetch('/api/translate/text', {
           method: 'POST',
@@ -376,16 +465,22 @@ export function TranslatorScreen({
             text,
             sourceLanguage: { code: src.code, name: src.name },
             targetLanguage: { code: tgt.code, name: tgt.name },
+            featureMode,
           }),
+          signal: controller.signal,
         });
 
         const payload = (await res.json().catch(() => ({}))) as {
           detectedLanguage?: string;
           translatedText?: string;
           modelName?: string;
+          cached?: boolean;
           errorType?: string;
           detail?: string;
+          retryAfterSeconds?: number;
         };
+
+        const latencyMs = Date.now() - startedAt;
 
         if (!res.ok || !payload.translatedText) {
           const mapped: TranslationErrorType =
@@ -399,31 +494,70 @@ export function TranslatorScreen({
                     ? 'AI_UNAVAILABLE'
                     : 'UNKNOWN';
 
+          const isQuota = mapped === 'QUOTA_EXCEEDED' || res.status === 429;
+          if (isQuota) {
+            onQuotaExceeded?.(payload.retryAfterSeconds ?? 60);
+          }
+
+          recordAiUsageEvent({
+            feature: trackedFeature,
+            cached: false,
+            quotaError: isQuota,
+            latencyMs,
+          });
+          onUsageUpdated?.();
+
           return { ok: false, error: { type: mapped, detail: payload.detail } };
         }
 
-        return {
-          ok: true,
-          data: {
-            sourceText: text,
-            translatedText: payload.translatedText,
-            detectedSourceLanguage: payload.detectedLanguage || src.name,
-            targetLanguageName: tgt.name,
-            modelName: payload.modelName || 'gemini-4-hydrogen',
-          },
+        const resolvedModel = payload.modelName || 'gemini-3.1-flash-lite';
+        const data: TextTranslationOutput = {
+          sourceText: text,
+          translatedText: payload.translatedText,
+          detectedSourceLanguage: payload.detectedLanguage || src.name,
+          targetLanguageName: tgt.name,
+          modelName: resolvedModel,
+          cached: Boolean(payload.cached),
         };
+
+        if (textCacheRef.current.size >= TRANSLATION_CACHE_MAX_ENTRIES) {
+          const oldest = textCacheRef.current.keys().next().value;
+          if (oldest) textCacheRef.current.delete(oldest);
+        }
+        textCacheRef.current.set(cacheKey, {
+          data,
+          expiresAt: Date.now() + TRANSLATION_CACHE_TTL_MS,
+        });
+
+        recordAiUsageEvent({
+          feature: trackedFeature,
+          cached: Boolean(payload.cached),
+          latencyMs,
+          modelName: resolvedModel,
+        });
+        onUsageUpdated?.();
+
+        return { ok: true, data };
       } catch (err) {
-        const isNetwork = err instanceof TypeError;
+        const isNetwork = timedOut || err instanceof TypeError;
         return {
           ok: false,
           error: {
             type: isNetwork ? 'NETWORK' : 'UNKNOWN',
-            detail: err instanceof Error ? err.message : undefined,
+            detail: timedOut
+              ? language === 'hi'
+                ? 'अनुरोध का समय समाप्त हो गया। कृपया नेटवर्क जांचें और पुनः प्रयास करें।'
+                : 'Translation request timed out. Please check your connection and try again.'
+              : err instanceof Error
+                ? err.message
+                : undefined,
           },
         };
+      } finally {
+        window.clearTimeout(timeoutId);
       }
     },
-    []
+    [language, onQuotaExceeded, onUsageUpdated, quotaCooldownSeconds]
   );
 
   // --- Text Translator Handlers ---
@@ -443,7 +577,12 @@ export function TranslatorScreen({
   };
 
   const handleTranslateText = async () => {
-    if (isTranslatingText) return;
+    if (textInFlightRef.current || isTranslatingText) return;
+    if (quotaCooldownSeconds > 0) {
+      setTextError({ type: 'QUOTA_EXCEEDED' });
+      return;
+    }
+
     const validation = validateTranslationInput(inputText);
     if (validation.status === 'empty') {
       setTextError({ type: 'EMPTY_INPUT' });
@@ -460,26 +599,36 @@ export function TranslatorScreen({
       return;
     }
 
+    textInFlightRef.current = true;
     setIsTranslatingText(true);
     setTextError(null);
     setStatusNotice(null);
 
-    const outcome = await callTextTranslateApi(validation.cleanedText, sourceLang, targetLang);
-    setIsTranslatingText(false);
-    if (outcome.ok) {
-      setTextResult(outcome.data);
-      appendHistory({
-        mode: 'text',
-        sourceLanguageCode: sourceLang.code,
-        sourceLanguageName: outcome.data.detectedSourceLanguage,
-        targetLanguageCode: targetLang.code,
-        targetLanguageName: targetLang.name,
-        sourceText: outcome.data.sourceText,
-        translatedText: outcome.data.translatedText,
-      });
-    } else {
-      // Preserve user's inputText cleanly on failure
-      setTextError(outcome.error);
+    try {
+      const outcome = await callTextTranslateApi(
+        validation.cleanedText,
+        sourceLang,
+        targetLang,
+        'text'
+      );
+      if (outcome.ok) {
+        setTextResult(outcome.data);
+        appendHistory({
+          mode: 'text',
+          sourceLanguageCode: sourceLang.code,
+          sourceLanguageName: outcome.data.detectedSourceLanguage,
+          targetLanguageCode: targetLang.code,
+          targetLanguageName: targetLang.name,
+          sourceText: outcome.data.sourceText,
+          translatedText: outcome.data.translatedText,
+        });
+      } else {
+        // Preserve user's inputText cleanly on failure
+        setTextError(outcome.error);
+      }
+    } finally {
+      textInFlightRef.current = false;
+      setIsTranslatingText(false);
     }
   };
 
@@ -579,26 +728,61 @@ export function TranslatorScreen({
   };
 
   const handleTranslateCameraImage = async () => {
-    if (!cameraImage || isTranslatingCamera) return;
+    if (!cameraImage || cameraInFlightRef.current || isTranslatingCamera) return;
+    if (quotaCooldownSeconds > 0) {
+      setCameraError({ type: 'QUOTA_EXCEEDED' });
+      return;
+    }
+
+    const cacheKey = `${cameraImage.uri}|${cameraTargetLang.code}`;
+    const cachedEntry = cameraCacheRef.current.get(cacheKey);
+    if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
+      setCameraError(null);
+      setCameraResult({ ...cachedEntry.data, cached: true });
+      recordAiUsageEvent({
+        feature: 'camera_translate',
+        cached: true,
+        latencyMs: 0,
+        modelName: cachedEntry.data.modelName,
+      });
+      onUsageUpdated?.();
+      return;
+    }
+    if (cachedEntry) {
+      cameraCacheRef.current.delete(cacheKey);
+    }
+
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       setCameraError({ type: 'NETWORK' });
       return;
     }
+
+    cameraInFlightRef.current = true;
     setIsTranslatingCamera(true);
+    setCameraStage('compressing');
     setCameraError(null);
     setCameraResult(null);
     setStatusNotice(null);
 
-    let encoded;
-    try {
-      encoded = await decodeAndResizeImageUri(cameraImage.uri);
-    } catch {
-      setIsTranslatingCamera(false);
-      setCameraError({ type: 'INVALID_IMAGE' });
-      return;
-    }
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, CAMERA_TRANSLATE_TIMEOUT_MS);
 
     try {
+      let encoded;
+      try {
+        encoded = await decodeAndResizeImageUri(cameraImage.uri, 'ocr');
+      } catch {
+        setCameraError({ type: 'INVALID_IMAGE' });
+        return;
+      }
+
+      setCameraStage('translating');
+
       const res = await fetch('/api/translate/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -607,14 +791,16 @@ export function TranslatorScreen({
           mimeType: encoded.mimeType,
           targetLanguage: { code: cameraTargetLang.code, name: cameraTargetLang.name },
         }),
+        signal: controller.signal,
       });
 
       const payload = (await res.json().catch(() => ({}))) as Partial<CameraTranslationOutput> & {
         errorType?: string;
         detail?: string;
+        retryAfterSeconds?: number;
       };
 
-      setIsTranslatingCamera(false);
+      const latencyMs = Date.now() - startedAt;
 
       if (!res.ok || typeof payload.hasReadableText !== 'boolean') {
         const mapped: TranslationErrorType =
@@ -628,10 +814,24 @@ export function TranslatorScreen({
                   ? 'AI_UNAVAILABLE'
                   : 'UNKNOWN';
 
+        const isQuota = mapped === 'QUOTA_EXCEEDED' || res.status === 429;
+        if (isQuota) {
+          onQuotaExceeded?.(payload.retryAfterSeconds ?? 60);
+        }
+
+        recordAiUsageEvent({
+          feature: 'camera_translate',
+          cached: false,
+          quotaError: isQuota,
+          latencyMs,
+        });
+        onUsageUpdated?.();
+
         setCameraError({ type: mapped, detail: payload.detail });
         return;
       }
 
+      const resolvedModel = payload.modelName ?? 'gemini-3.1-flash-lite';
       const output: CameraTranslationOutput = {
         hasReadableText: payload.hasReadableText,
         detectedSourceLanguage: payload.detectedSourceLanguage ?? null,
@@ -639,8 +839,26 @@ export function TranslatorScreen({
         translatedText: payload.translatedText ?? '',
         readabilityNote: payload.readabilityNote ?? null,
         targetLanguageName: payload.targetLanguageName ?? cameraTargetLang.name,
-        modelName: payload.modelName ?? 'gemini-4-hydrogen',
+        modelName: resolvedModel,
+        cached: Boolean(payload.cached),
       };
+
+      if (cameraCacheRef.current.size >= TRANSLATION_CACHE_MAX_ENTRIES) {
+        const oldest = cameraCacheRef.current.keys().next().value;
+        if (oldest) cameraCacheRef.current.delete(oldest);
+      }
+      cameraCacheRef.current.set(cacheKey, {
+        data: output,
+        expiresAt: Date.now() + TRANSLATION_CACHE_TTL_MS,
+      });
+
+      recordAiUsageEvent({
+        feature: 'camera_translate',
+        cached: Boolean(payload.cached),
+        latencyMs,
+        modelName: resolvedModel,
+      });
+      onUsageUpdated?.();
 
       setCameraResult(output);
 
@@ -656,42 +874,74 @@ export function TranslatorScreen({
         });
       }
     } catch (err) {
-      setIsTranslatingCamera(false);
       setCameraError({
-        type: err instanceof TypeError ? 'NETWORK' : 'UNKNOWN',
-        detail: err instanceof Error ? err.message : undefined,
+        type: timedOut || err instanceof TypeError ? 'NETWORK' : 'UNKNOWN',
+        detail: timedOut
+          ? language === 'hi'
+            ? 'इमेज अनुवाद का समय समाप्त हो गया। कृपया पुनः प्रयास करें।'
+            : 'Image translation timed out. Please check your connection and try again.'
+          : err instanceof Error
+            ? err.message
+            : undefined,
       });
+    } finally {
+      window.clearTimeout(timeoutId);
+      cameraInFlightRef.current = false;
+      setIsTranslatingCamera(false);
+      setCameraStage('idle');
     }
   };
 
   // --- Voice Translator Handlers ---
   const handleTranslateVoiceText = useCallback(
     async (transcriptText: string, autoSpeak = false) => {
+      if (voiceInFlightRef.current) return;
+      if (quotaCooldownSeconds > 0) {
+        setVoiceError({ type: 'QUOTA_EXCEEDED' });
+        return;
+      }
       const cleaned = transcriptText.trim();
       if (!cleaned) return;
+      voiceInFlightRef.current = true;
       setIsTranslatingVoice(true);
       setVoiceError(null);
-      const outcome = await callTextTranslateApi(cleaned, voiceSourceLang, voiceTargetLang);
-      setIsTranslatingVoice(false);
-      if (outcome.ok) {
-        setVoiceResult(outcome.data);
-        appendHistory({
-          mode: 'voice',
-          sourceLanguageCode: voiceSourceLang.code,
-          sourceLanguageName: outcome.data.detectedSourceLanguage,
-          targetLanguageCode: voiceTargetLang.code,
-          targetLanguageName: voiceTargetLang.name,
-          sourceText: outcome.data.sourceText,
-          translatedText: outcome.data.translatedText,
-        });
-        if (autoSpeak) {
-          speakText(outcome.data.translatedText, voiceTargetLang.speechLocaleTag, voiceTargetLang.name);
+      try {
+        const outcome = await callTextTranslateApi(
+          cleaned,
+          voiceSourceLang,
+          voiceTargetLang,
+          'voice'
+        );
+        if (outcome.ok) {
+          setVoiceResult(outcome.data);
+          appendHistory({
+            mode: 'voice',
+            sourceLanguageCode: voiceSourceLang.code,
+            sourceLanguageName: outcome.data.detectedSourceLanguage,
+            targetLanguageCode: voiceTargetLang.code,
+            targetLanguageName: voiceTargetLang.name,
+            sourceText: outcome.data.sourceText,
+            translatedText: outcome.data.translatedText,
+          });
+          if (autoSpeak) {
+            speakText(outcome.data.translatedText, voiceTargetLang.speechLocaleTag, voiceTargetLang.name);
+          }
+        } else {
+          setVoiceError(outcome.error);
         }
-      } else {
-        setVoiceError(outcome.error);
+      } finally {
+        voiceInFlightRef.current = false;
+        setIsTranslatingVoice(false);
       }
     },
-    [appendHistory, callTextTranslateApi, speakText, voiceSourceLang, voiceTargetLang]
+    [
+      appendHistory,
+      callTextTranslateApi,
+      quotaCooldownSeconds,
+      speakText,
+      voiceSourceLang,
+      voiceTargetLang,
+    ]
   );
 
   const startSpeechCapture = (
@@ -795,44 +1045,54 @@ export function TranslatorScreen({
   // --- Conversation Translator Handlers ---
   const handleSendConversationTurn = useCallback(
     async (isPersonA: boolean, text: string, autoSpeak = false) => {
+      if (convInFlightRef.current) return;
+      if (quotaCooldownSeconds > 0) {
+        setConvError({ type: 'QUOTA_EXCEEDED' });
+        return;
+      }
       const cleaned = text.trim();
       if (!cleaned) return;
       const src = isPersonA ? personALang : personBLang;
       const tgt = isPersonA ? personBLang : personALang;
 
+      convInFlightRef.current = true;
       setIsTranslatingConv(true);
       setConvError(null);
-      const outcome = await callTextTranslateApi(cleaned, src, tgt);
-      setIsTranslatingConv(false);
+      try {
+        const outcome = await callTextTranslateApi(cleaned, src, tgt, 'conversation');
 
-      if (outcome.ok) {
-        const turn: ConversationTurn = {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          speakerLabel: isPersonA ? strings.translatorConvPersonA : strings.translatorConvPersonB,
-          isPersonA,
-          sourceLanguageCode: src.code,
-          sourceLanguageName: src.name,
-          targetLanguageCode: tgt.code,
-          targetLanguageName: tgt.name,
-          targetSpeechLocale: tgt.speechLocaleTag,
-          originalText: outcome.data.sourceText,
-          translatedText: outcome.data.translatedText,
-        };
-        setConversationTurns((prev) => [...prev, turn]);
-        appendHistory({
-          mode: 'conversation',
-          sourceLanguageCode: src.code,
-          sourceLanguageName: src.name,
-          targetLanguageCode: tgt.code,
-          targetLanguageName: tgt.name,
-          sourceText: outcome.data.sourceText,
-          translatedText: outcome.data.translatedText,
-        });
-        if (autoSpeak) {
-          speakText(outcome.data.translatedText, tgt.speechLocaleTag, tgt.name);
+        if (outcome.ok) {
+          const turn: ConversationTurn = {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            speakerLabel: isPersonA ? strings.translatorConvPersonA : strings.translatorConvPersonB,
+            isPersonA,
+            sourceLanguageCode: src.code,
+            sourceLanguageName: src.name,
+            targetLanguageCode: tgt.code,
+            targetLanguageName: tgt.name,
+            targetSpeechLocale: tgt.speechLocaleTag,
+            originalText: outcome.data.sourceText,
+            translatedText: outcome.data.translatedText,
+          };
+          setConversationTurns((prev) => [...prev, turn]);
+          appendHistory({
+            mode: 'conversation',
+            sourceLanguageCode: src.code,
+            sourceLanguageName: src.name,
+            targetLanguageCode: tgt.code,
+            targetLanguageName: tgt.name,
+            sourceText: outcome.data.sourceText,
+            translatedText: outcome.data.translatedText,
+          });
+          if (autoSpeak) {
+            speakText(outcome.data.translatedText, tgt.speechLocaleTag, tgt.name);
+          }
+        } else {
+          setConvError(outcome.error);
         }
-      } else {
-        setConvError(outcome.error);
+      } finally {
+        convInFlightRef.current = false;
+        setIsTranslatingConv(false);
       }
     },
     [
@@ -840,6 +1100,7 @@ export function TranslatorScreen({
       callTextTranslateApi,
       personALang,
       personBLang,
+      quotaCooldownSeconds,
       speakText,
       strings.translatorConvPersonA,
       strings.translatorConvPersonB,
@@ -887,7 +1148,7 @@ export function TranslatorScreen({
       translatedText: rec.translatedText,
       detectedSourceLanguage: rec.sourceLanguageName,
       targetLanguageName: rec.targetLanguageName,
-      modelName: 'gemini-4-hydrogen',
+      modelName: 'gemini-3.1-flash-lite',
     });
     setTextError(null);
     setActiveTab('text');
@@ -1053,13 +1314,21 @@ export function TranslatorScreen({
                 : 'Your entered text has been preserved.'}
             </p>
           )}
+          {quotaCooldownSeconds > 0 && err.type === 'QUOTA_EXCEEDED' && (
+            <p className="text-[11px] font-medium text-amber-800 mt-1.5">
+              {strings.aiQuotaCooldownHint} ({quotaCooldownSeconds}s)
+            </p>
+          )}
           {onRetry && !isValidationOnly && (
             <button
               type="button"
+              disabled={quotaCooldownSeconds > 0}
               onClick={onRetry}
-              className="mt-3 min-h-[38px] px-3.5 rounded-xl bg-white border border-red-200 text-xs font-semibold text-red-800 hover:bg-red-100/60 transition-colors"
+              className="mt-3 min-h-[38px] px-3.5 rounded-xl bg-white border border-red-200 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-semibold text-red-800 hover:bg-red-100/60 transition-colors"
             >
-              {strings.aiTryAgain}
+              {quotaCooldownSeconds > 0
+                ? `${strings.aiTryAgain} (${quotaCooldownSeconds}s)`
+                : strings.aiTryAgain}
             </button>
           )}
         </div>
@@ -1262,7 +1531,7 @@ export function TranslatorScreen({
                   <button
                     type="button"
                     onClick={() => void handleTranslateText()}
-                    disabled={isTranslatingText || isOverLimit}
+                    disabled={isTranslatingText || isOverLimit || quotaCooldownSeconds > 0}
                     className="flex-1 sm:flex-none min-h-[48px] px-6 rounded-xl bg-[#1A6BFF] hover:bg-[#1258DB] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
                   >
                     {isTranslatingText ? (
@@ -1273,7 +1542,11 @@ export function TranslatorScreen({
                     ) : (
                       <>
                         <Languages className="w-4 h-4" aria-hidden="true" />
-                        <span>{strings.translatorTranslateBtn}</span>
+                        <span>
+                          {quotaCooldownSeconds > 0
+                            ? `${strings.translatorTranslateBtn} (${quotaCooldownSeconds}s)`
+                            : strings.translatorTranslateBtn}
+                        </span>
                       </>
                     )}
                   </button>
@@ -1301,10 +1574,15 @@ export function TranslatorScreen({
           {/* Output Card */}
           {textResult && (
             <div className="rounded-2xl bg-white border border-[#1A6BFF]/25 p-5 sm:p-6 shadow-xs space-y-4">
-              <p className="text-xs font-semibold text-[#1A6BFF]">
-                {strings.translatorDetectedPrefix}: {textResult.detectedSourceLanguage} ·{' '}
-                {textResult.targetLanguageName}
-              </p>
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-[#1A6BFF]">
+                  {strings.translatorDetectedPrefix}: {textResult.detectedSourceLanguage} ·{' '}
+                  {textResult.targetLanguageName}
+                </p>
+                {textResult.cached && (
+                  <p className="text-xs text-slate-500">{strings.aiCachedResultBadge}</p>
+                )}
+              </div>
 
               <p className="text-base sm:text-lg leading-relaxed text-[#071428] whitespace-pre-wrap">
                 {textResult.translatedText}
@@ -1449,18 +1727,26 @@ export function TranslatorScreen({
               <button
                 type="button"
                 onClick={() => void handleTranslateCameraImage()}
-                disabled={!cameraImage || isTranslatingCamera}
+                disabled={!cameraImage || isTranslatingCamera || quotaCooldownSeconds > 0}
                 className="flex-1 min-h-[46px] px-5 rounded-xl bg-[#1A6BFF] hover:bg-[#1258DB] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors"
               >
                 {isTranslatingCamera ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                    <span>{strings.translatorCameraExtractingBtn}</span>
+                    <span>
+                      {cameraStage === 'compressing'
+                        ? strings.aiCompressingTitle
+                        : strings.translatorCameraExtractingBtn}
+                    </span>
                   </>
                 ) : (
                   <>
                     <Languages className="w-4 h-4" aria-hidden="true" />
-                    <span>{strings.translatorCameraExtractBtn}</span>
+                    <span>
+                      {quotaCooldownSeconds > 0
+                        ? `${strings.translatorCameraExtractBtn} (${quotaCooldownSeconds}s)`
+                        : strings.translatorCameraExtractBtn}
+                    </span>
                   </>
                 )}
               </button>
@@ -1629,7 +1915,7 @@ export function TranslatorScreen({
               <button
                 type="button"
                 onClick={handleToggleVoiceListening}
-                disabled={!speechSupported || isTranslatingVoice}
+                disabled={!speechSupported || isTranslatingVoice || quotaCooldownSeconds > 0}
                 className={`min-h-[54px] px-7 rounded-2xl text-sm font-semibold inline-flex items-center gap-2.5 transition-colors disabled:opacity-45 ${
                   isListeningVoice
                     ? 'bg-[#071428] text-white'
@@ -1676,7 +1962,7 @@ export function TranslatorScreen({
               <button
                 type="button"
                 onClick={() => void handleTranslateVoiceText(voiceTranscript, false)}
-                disabled={!voiceTranscript.trim() || isTranslatingVoice}
+                disabled={!voiceTranscript.trim() || isTranslatingVoice || quotaCooldownSeconds > 0}
                 className="flex-1 sm:flex-none min-h-[44px] px-5 rounded-xl bg-[#1A6BFF] hover:bg-[#1258DB] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center justify-center gap-2"
               >
                 {isTranslatingVoice ? (
@@ -1685,7 +1971,11 @@ export function TranslatorScreen({
                     <span>{strings.translatorTranslatingBtn}</span>
                   </>
                 ) : (
-                  <span>{strings.translatorTranslateBtn}</span>
+                  <span>
+                    {quotaCooldownSeconds > 0
+                      ? `${strings.translatorTranslateBtn} (${quotaCooldownSeconds}s)`
+                      : strings.translatorTranslateBtn}
+                  </span>
                 )}
               </button>
               <button
@@ -1765,7 +2055,7 @@ export function TranslatorScreen({
               <button
                 type="button"
                 onClick={() => handleToggleConversationMic('A')}
-                disabled={!speechSupported}
+                disabled={!speechSupported || isTranslatingConv || quotaCooldownSeconds > 0}
                 className={`w-full min-h-[44px] rounded-xl text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-45 ${
                   listeningSpeaker === 'A'
                     ? 'bg-[#071428] text-white'
@@ -1786,7 +2076,7 @@ export function TranslatorScreen({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (!draftA.trim()) return;
+                  if (!draftA.trim() || isTranslatingConv || quotaCooldownSeconds > 0) return;
                   const msg = draftA;
                   setDraftA('');
                   void handleSendConversationTurn(true, msg, false);
@@ -1802,7 +2092,7 @@ export function TranslatorScreen({
                 />
                 <button
                   type="submit"
-                  disabled={!draftA.trim() || isTranslatingConv}
+                  disabled={!draftA.trim() || isTranslatingConv || quotaCooldownSeconds > 0}
                   aria-label="Send Person A"
                   className="min-w-[42px] min-h-[42px] rounded-xl bg-[#071428] text-white disabled:opacity-40 flex items-center justify-center shrink-0"
                 >
@@ -1830,7 +2120,7 @@ export function TranslatorScreen({
               <button
                 type="button"
                 onClick={() => handleToggleConversationMic('B')}
-                disabled={!speechSupported}
+                disabled={!speechSupported || isTranslatingConv || quotaCooldownSeconds > 0}
                 className={`w-full min-h-[44px] rounded-xl text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-45 ${
                   listeningSpeaker === 'B'
                     ? 'bg-[#1A6BFF] text-white'
@@ -1851,7 +2141,7 @@ export function TranslatorScreen({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (!draftB.trim()) return;
+                  if (!draftB.trim() || isTranslatingConv || quotaCooldownSeconds > 0) return;
                   const msg = draftB;
                   setDraftB('');
                   void handleSendConversationTurn(false, msg, false);
@@ -1867,7 +2157,7 @@ export function TranslatorScreen({
                 />
                 <button
                   type="submit"
-                  disabled={!draftB.trim() || isTranslatingConv}
+                  disabled={!draftB.trim() || isTranslatingConv || quotaCooldownSeconds > 0}
                   aria-label="Send Person B"
                   className="min-w-[42px] min-h-[42px] rounded-xl bg-[#1A6BFF] text-white disabled:opacity-40 flex items-center justify-center shrink-0"
                 >

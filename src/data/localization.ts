@@ -290,6 +290,14 @@ export interface AppStrings {
   settingsCloudSignOutBtn: string;
   settingsCloudSyncErrorNotice: string;
   historyCloudSyncNotice: string;
+
+  aiCompressingTitle: string;
+  aiCompressingBody: string;
+  aiCachedResultBadge: string;
+  aiQuotaCooldownHint: string;
+  settingsUsageTitle: string;
+  settingsUsageSubtitle: string;
+  settingsUsageResetBtn: string;
 }
 
 export const STRINGS: Record<AppLanguage, AppStrings> = {
@@ -368,8 +376,8 @@ export const STRINGS: Record<AppLanguage, AppStrings> = {
     aiNewScan: 'New Scan',
     aiErrorNetworkTitle: 'Network connection failed',
     aiErrorNetworkBody: 'Could not reach the AI service over the network. Check your internet connection and tap Try Again.',
-    aiErrorQuotaTitle: 'AI quota limit reached',
-    aiErrorQuotaBody: 'The Gemini API request quota was temporarily exceeded. Please wait a moment and try again.',
+    aiErrorQuotaTitle: 'Gemini API quota reached (429)',
+    aiErrorQuotaBody: 'The Gemini API quota or rate limit has been exhausted. Automatic retries have been stopped. Please wait for your quota to reset or enable billing on your Gemini API project if needed.',
     aiErrorInvalidImageTitle: 'Invalid or unreadable image',
     aiErrorInvalidImageBody: 'WorldLens could not decode this image safely. Try retaking the photo or choosing another JPEG, PNG, or WebP image.',
     aiErrorUnavailableTitle: 'AI service unavailable',
@@ -601,6 +609,14 @@ export const STRINGS: Record<AppLanguage, AppStrings> = {
     settingsCloudSignOutBtn: 'Sign Out',
     settingsCloudSyncErrorNotice: 'Could not sync with Firebase right now. Please check your connection and try again.',
     historyCloudSyncNotice: 'Synced privately to your Firebase account · Photos are never uploaded to Firestore',
+
+    aiCompressingTitle: 'Optimizing photo before scanning...',
+    aiCompressingBody: 'Resizing and compressing your image locally to speed up scanning and save Gemini quota.',
+    aiCachedResultBadge: 'Served from recent cache (0 API calls)',
+    aiQuotaCooldownHint: 'Quota cooldown active — please wait before sending another AI request.',
+    settingsUsageTitle: 'AI Request Usage',
+    settingsUsageSubtitle: 'Tracks local AI requests, cache hits saved, and quota errors by feature.',
+    settingsUsageResetBtn: 'Reset Counters',
   },
   hi: {
     brandName: 'WORLDLENS',
@@ -677,8 +693,8 @@ export const STRINGS: Record<AppLanguage, AppStrings> = {
     aiNewScan: 'नया स्कैन',
     aiErrorNetworkTitle: 'नेटवर्क कनेक्शन विफल',
     aiErrorNetworkBody: 'नेटवर्क के माध्यम से AI सेवा तक नहीं पहुँचा जा सका। कृपया अपना इंटरनेट कनेक्शन जाँचें और पुनः प्रयास करें।',
-    aiErrorQuotaTitle: 'AI सीमा समाप्त हो गई',
-    aiErrorQuotaBody: 'Gemini API अनुरोध सीमा अस्थायी रूप से पूरी हो गई है। कृपया थोड़ी देर बाद पुनः प्रयास करें।',
+    aiErrorQuotaTitle: 'Gemini API सीमा समाप्त (429)',
+    aiErrorQuotaBody: 'Gemini API की कोटा या दर सीमा पूरी हो गई है। स्वचालित पुनः प्रयास रोक दिए गए हैं। कृपया कोटा रीसेट होने तक प्रतीक्षा करें या आवश्यकतानुसार अपने Gemini API प्रोजेक्ट में बिलिंग कॉन्फ़िगर करें।',
     aiErrorInvalidImageTitle: 'अमान्य या अपठनीय छवि',
     aiErrorInvalidImageBody: 'WorldLens इस छवि को सुरक्षित रूप से पढ़ नहीं सका। कृपया नई फ़ोटो लें या दूसरी JPEG, PNG या WebP छवि चुनें।',
     aiErrorUnavailableTitle: 'AI सेवा उपलब्ध नहीं है',
@@ -910,5 +926,13 @@ export const STRINGS: Record<AppLanguage, AppStrings> = {
     settingsCloudSignOutBtn: 'साइन आउट करें',
     settingsCloudSyncErrorNotice: 'अभी Firebase के साथ सिंक नहीं हो सका। कृपया इंटरनेट जाँचें और पुनः प्रयास करें।',
     historyCloudSyncNotice: 'आपके Firebase खाते में निजी रूप से सिंक · फ़ोटो कभी Firestore पर अपलोड नहीं होते',
+
+    aiCompressingTitle: 'स्कैन से पहले छवि अनुकूलित की जा रही है...',
+    aiCompressingBody: 'तेज़ स्कैन और Gemini कोटा बचाने के लिए छवि को डिवाइस पर कॉम्प्रेस किया जा रहा है।',
+    aiCachedResultBadge: 'हाल के कैश से प्राप्त (0 API कॉल)',
+    aiQuotaCooldownHint: 'कोटा कूलडाउन सक्रिय है — कृपया अगला AI अनुरोध भेजने से पहले प्रतीक्षा करें।',
+    settingsUsageTitle: 'AI अनुरोध उपयोग',
+    settingsUsageSubtitle: 'सुविधा के अनुसार स्थानीय AI अनुरोध, कैश बचत और कोटा त्रुटियाँ ट्रैक करता है।',
+    settingsUsageResetBtn: 'काउंटर रीसेट करें',
   },
 };

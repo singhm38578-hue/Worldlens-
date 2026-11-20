@@ -41,6 +41,14 @@ import {
   updateUserLanguagePreference,
 } from './data/firestoreHistoryService';
 import { useFirebaseAuth } from './context/FirebaseContext';
+import {
+  getQuotaCooldownRemainingSeconds,
+  loadAiUsageStats,
+  recordAiUsageEvent,
+  resetAiUsageStats,
+  setQuotaCooldown,
+  type LocalAiUsageStats,
+} from './data/usageTracker';
 import { createSafeThumbnailDataUrl, decodeAndResizeImageUri } from './utils/imageEncoder';
 import { AppShell } from './components/AppShell';
 import { AndroidSourceModal } from './components/AndroidSourceModal';
@@ -61,6 +69,17 @@ const VALID_ERROR_TYPES = new Set<ScanAnalysisError>([
   'AI_UNAVAILABLE',
   'UNKNOWN',
 ]);
+
+const SCAN_CLIENT_TIMEOUT_MS = 30_000;
+const SCAN_CACHE_TTL_MS = 10 * 60 * 1000;
+const SCAN_CACHE_MAX_ENTRIES = 25;
+
+interface CachedScanEntry {
+  report: VisualRecognitionReport;
+  modelName: string;
+  language: AppLanguage;
+  expiresAt: number;
+}
 
 export default function App() {
   const {
@@ -94,8 +113,14 @@ export default function App() {
   const [historyStorageError, setHistoryStorageError] = useState<string | null>(null);
   const [prefillTranslation, setPrefillTranslation] = useState<LocalTranslationRecord | null>(null);
   const [androidModalOpen, setAndroidModalOpen] = useState(false);
+  const [usageStats, setUsageStats] = useState<LocalAiUsageStats>(() => loadAiUsageStats());
+  const [quotaCooldownSeconds, setQuotaCooldownSeconds] = useState<number>(() =>
+    getQuotaCooldownRemainingSeconds()
+  );
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const scanInFlightRef = useRef<boolean>(false);
+  const scanCacheRef = useRef<Map<string, CachedScanEntry>>(new Map());
 
   const isSignedIn = Boolean(authReady && user);
   const scanHistory = isSignedIn ? cloudScanHistory : localScanHistory;
@@ -190,6 +215,28 @@ export default function App() {
   }, [selectedImage?.uri]);
 
   useEffect(() => {
+    if (quotaCooldownSeconds <= 0) return;
+    const timer = window.setInterval(() => {
+      const remaining = getQuotaCooldownRemainingSeconds();
+      setQuotaCooldownSeconds(remaining);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [quotaCooldownSeconds]);
+
+  const triggerQuotaCooldown = useCallback((retryAfterSeconds?: number) => {
+    setQuotaCooldown(retryAfterSeconds ?? 60);
+    setQuotaCooldownSeconds(getQuotaCooldownRemainingSeconds());
+  }, []);
+
+  const refreshUsageStats = useCallback(() => {
+    setUsageStats(loadAiUsageStats());
+  }, []);
+
+  const handleResetUsageStats = useCallback(() => {
+    setUsageStats(resetAiUsageStats());
+  }, []);
+
+  useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
     };
@@ -206,6 +253,7 @@ export default function App() {
 
   const handleSelectImage = (image: SelectedScanImage | null) => {
     abortControllerRef.current?.abort();
+    scanInFlightRef.current = false;
     setSelectedImage(image);
     setAnalysisState({ status: 'idle' });
   };
@@ -335,138 +383,247 @@ export default function App() {
     setPrefillTranslation(null);
   }, []);
 
-  const analyzeSelectedImage = useCallback(async () => {
-    if (!selectedImage) {
-      setAnalysisState({
-        status: 'error',
-        errorType: 'INVALID_IMAGE',
-      });
-      return;
-    }
+  const analyzeSelectedImage = useCallback(
+    async (options?: { forceRefresh?: boolean }) => {
+      if (scanInFlightRef.current) return;
 
-    abortControllerRef.current?.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    setPreviousScreen('scanner');
-    setScreen('ai-result');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      setAnalysisState({
-        status: 'error',
-        errorType: 'NETWORK',
-      });
-      return;
-    }
-
-    setAnalysisState({ status: 'loading' });
-
-    let encoded;
-    try {
-      encoded = await decodeAndResizeImageUri(selectedImage.uri);
-    } catch {
-      if (controller.signal.aborted) return;
-      setAnalysisState({
-        status: 'error',
-        errorType: 'INVALID_IMAGE',
-      });
-      return;
-    }
-
-    try {
-      const response = await fetch('/api/vision/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: encoded.imageBase64,
-          mimeType: encoded.mimeType,
-          language,
-        }),
-        signal: controller.signal,
-      });
-
-      const payload = (await response.json().catch(() => ({}))) as {
-        report?: VisualRecognitionReport;
-        modelName?: string;
-        errorType?: string;
-        detail?: string;
-      };
-
-      if (controller.signal.aborted) return;
-
-      if (!response.ok || !payload.report) {
-        const mappedError: ScanAnalysisError =
-          payload.errorType && VALID_ERROR_TYPES.has(payload.errorType as ScanAnalysisError)
-            ? (payload.errorType as ScanAnalysisError)
-            : response.status === 429
-              ? 'QUOTA_EXCEEDED'
-              : response.status === 400
-                ? 'INVALID_IMAGE'
-                : response.status === 503
-                  ? 'AI_UNAVAILABLE'
-                  : 'UNKNOWN';
-
+      if (!selectedImage) {
         setAnalysisState({
           status: 'error',
-          errorType: mappedError,
-          detail: payload.detail,
+          errorType: 'INVALID_IMAGE',
         });
         return;
       }
 
-      const resolvedModel = payload.modelName ?? 'gemini-4-hydrogen';
-      setAnalysisState({
-        status: 'success',
-        report: payload.report,
-        modelName: resolvedModel,
-        language,
-      });
-
-      if (user) {
-        // Save text-only scan report privately to Cloud Firestore (never uploads photo bytes)
-        setHistoryStorageError(null);
-        void saveCloudScan(user, {
-          report: payload.report,
-          language,
-          modelName: resolvedModel,
-          sourceLabel: selectedImage.source,
-        }).catch(() => {
-          setHistoryStorageError(strings.settingsCloudSyncErrorNotice);
+      const cooldownRemaining = getQuotaCooldownRemainingSeconds();
+      if (cooldownRemaining > 0) {
+        setQuotaCooldownSeconds(cooldownRemaining);
+        setPreviousScreen('scanner');
+        setScreen('ai-result');
+        setAnalysisState({
+          status: 'error',
+          errorType: 'QUOTA_EXCEEDED',
+          retryAfterSeconds: cooldownRemaining,
         });
-      } else {
-        // Guest Mode: persist structured scan result + optional compact local thumbnail strictly on-device
-        const safeThumbnail = await createSafeThumbnailDataUrl(selectedImage.uri).catch(
-          () => undefined
-        );
-        let saveErr: string | null = null;
-        setLocalScanHistory(
-          saveScanHistoryItem(
-            {
-              report: payload.report,
-              language,
-              modelName: resolvedModel,
-              sourceLabel: selectedImage.source,
-              thumbnailDataUrl: safeThumbnail,
-            },
-            undefined,
-            (reason) => {
-              saveErr = reason;
-            }
-          )
-        );
-        setHistoryStorageError(saveErr);
+        return;
       }
-    } catch (err) {
-      if (controller.signal.aborted) return;
-      const isNetworkError = err instanceof TypeError;
-      setAnalysisState({
-        status: 'error',
-        errorType: isNetworkError ? 'NETWORK' : 'UNKNOWN',
-        detail: err instanceof Error ? err.message : undefined,
-      });
-    }
-  }, [language, selectedImage, strings.settingsCloudSyncErrorNotice, user]);
+
+      const cacheKey = `${selectedImage.uri}::${language}`;
+      if (!options?.forceRefresh) {
+        const cached = scanCacheRef.current.get(cacheKey);
+        if (cached && cached.expiresAt > Date.now()) {
+          setPreviousScreen('scanner');
+          setScreen('ai-result');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          setAnalysisState({
+            status: 'success',
+            report: cached.report,
+            modelName: cached.modelName,
+            language: cached.language,
+            cached: true,
+          });
+          setUsageStats(
+            recordAiUsageEvent({
+              feature: 'vision_scan',
+              cached: true,
+              latencyMs: 0,
+              modelName: cached.modelName,
+            })
+          );
+          return;
+        }
+        if (cached) {
+          scanCacheRef.current.delete(cacheKey);
+        }
+      }
+
+      scanInFlightRef.current = true;
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      setPreviousScreen('scanner');
+      setScreen('ai-result');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        scanInFlightRef.current = false;
+        setAnalysisState({
+          status: 'error',
+          errorType: 'NETWORK',
+        });
+        return;
+      }
+
+      const startedAt = Date.now();
+      let timedOut = false;
+      const timeoutId = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, SCAN_CLIENT_TIMEOUT_MS);
+
+      try {
+        setAnalysisState({ status: 'loading', stage: 'compressing' });
+
+        let encoded;
+        try {
+          encoded = await decodeAndResizeImageUri(selectedImage.uri, 'scan');
+        } catch {
+          if (controller.signal.aborted && !timedOut) return;
+          setAnalysisState({
+            status: 'error',
+            errorType: 'INVALID_IMAGE',
+          });
+          return;
+        }
+
+        if (controller.signal.aborted) return;
+        setAnalysisState({ status: 'loading', stage: 'analyzing' });
+
+        const response = await fetch('/api/vision/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: encoded.imageBase64,
+            mimeType: encoded.mimeType,
+            language,
+            bypassCache: Boolean(options?.forceRefresh),
+          }),
+          signal: controller.signal,
+        });
+
+        const payload = (await response.json().catch(() => ({}))) as {
+          report?: VisualRecognitionReport;
+          modelName?: string;
+          cached?: boolean;
+          errorType?: string;
+          detail?: string;
+          retryAfterSeconds?: number;
+        };
+
+        if (controller.signal.aborted && !timedOut) return;
+
+        const latencyMs = Date.now() - startedAt;
+
+        if (!response.ok || !payload.report) {
+          const mappedError: ScanAnalysisError =
+            payload.errorType && VALID_ERROR_TYPES.has(payload.errorType as ScanAnalysisError)
+              ? (payload.errorType as ScanAnalysisError)
+              : response.status === 429
+                ? 'QUOTA_EXCEEDED'
+                : response.status === 400
+                  ? 'INVALID_IMAGE'
+                  : response.status === 503
+                    ? 'AI_UNAVAILABLE'
+                    : 'UNKNOWN';
+
+          const isQuota = mappedError === 'QUOTA_EXCEEDED' || response.status === 429;
+          if (isQuota) {
+            triggerQuotaCooldown(payload.retryAfterSeconds ?? 60);
+          }
+
+          setUsageStats(
+            recordAiUsageEvent({
+              feature: 'vision_scan',
+              cached: false,
+              quotaError: isQuota,
+              latencyMs,
+            })
+          );
+
+          setAnalysisState({
+            status: 'error',
+            errorType: mappedError,
+            detail: payload.detail,
+            retryAfterSeconds: payload.retryAfterSeconds,
+          });
+          return;
+        }
+
+        const resolvedModel = payload.modelName ?? 'gemini-3.1-flash-lite';
+        const isServerCached = Boolean(payload.cached);
+
+        if (scanCacheRef.current.size >= SCAN_CACHE_MAX_ENTRIES) {
+          const oldestKey = scanCacheRef.current.keys().next().value;
+          if (oldestKey) scanCacheRef.current.delete(oldestKey);
+        }
+        scanCacheRef.current.set(cacheKey, {
+          report: payload.report,
+          modelName: resolvedModel,
+          language,
+          expiresAt: Date.now() + SCAN_CACHE_TTL_MS,
+        });
+
+        setUsageStats(
+          recordAiUsageEvent({
+            feature: 'vision_scan',
+            cached: isServerCached,
+            latencyMs,
+            modelName: resolvedModel,
+          })
+        );
+
+        setAnalysisState({
+          status: 'success',
+          report: payload.report,
+          modelName: resolvedModel,
+          language,
+          cached: isServerCached,
+        });
+
+        if (user) {
+          // Save text-only scan report privately to Cloud Firestore (never uploads photo bytes)
+          setHistoryStorageError(null);
+          void saveCloudScan(user, {
+            report: payload.report,
+            language,
+            modelName: resolvedModel,
+            sourceLabel: selectedImage.source,
+          }).catch(() => {
+            setHistoryStorageError(strings.settingsCloudSyncErrorNotice);
+          });
+        } else {
+          // Guest Mode: persist structured scan result + optional compact local thumbnail strictly on-device
+          const safeThumbnail = await createSafeThumbnailDataUrl(selectedImage.uri).catch(
+            () => undefined
+          );
+          let saveErr: string | null = null;
+          setLocalScanHistory(
+            saveScanHistoryItem(
+              {
+                report: payload.report,
+                language,
+                modelName: resolvedModel,
+                sourceLabel: selectedImage.source,
+                thumbnailDataUrl: safeThumbnail,
+              },
+              undefined,
+              (reason) => {
+                saveErr = reason;
+              }
+            )
+          );
+          setHistoryStorageError(saveErr);
+        }
+      } catch (err) {
+        if (controller.signal.aborted && !timedOut) return;
+        const isNetworkError = timedOut || err instanceof TypeError;
+        setAnalysisState({
+          status: 'error',
+          errorType: isNetworkError ? 'NETWORK' : 'UNKNOWN',
+          detail: timedOut
+            ? 'Request timed out. Please check your connection and try again.'
+            : err instanceof Error
+              ? err.message
+              : undefined,
+        });
+      } finally {
+        window.clearTimeout(timeoutId);
+        scanInFlightRef.current = false;
+      }
+    },
+    [language, selectedImage, strings.settingsCloudSyncErrorNotice, triggerQuotaCooldown, user]
+  );
 
   if (screen === 'splash') {
     return (
@@ -507,6 +664,7 @@ export default function App() {
             strings={strings}
             selectedImage={selectedImage}
             isAnalyzing={analysisState.status === 'loading'}
+            quotaCooldownSeconds={quotaCooldownSeconds}
             onImageSelected={handleSelectImage}
             onScanImage={() => {
               void analyzeSelectedImage();
@@ -520,6 +678,9 @@ export default function App() {
             strings={strings}
             scannerSelectedImage={selectedImage}
             translationHistory={translationHistory}
+            quotaCooldownSeconds={quotaCooldownSeconds}
+            onQuotaExceeded={triggerQuotaCooldown}
+            onUsageUpdated={refreshUsageStats}
             onSaveTranslation={handleSaveTranslation}
             onDeleteTranslation={handleDeleteTranslation}
             onClearTranslations={handleClearAllTranslations}
@@ -533,9 +694,10 @@ export default function App() {
             strings={strings}
             selectedImage={selectedImage}
             analysisState={analysisState}
+            quotaCooldownSeconds={quotaCooldownSeconds}
             onBack={() => handleNavigate('scanner')}
             onTryAgain={() => {
-              void analyzeSelectedImage();
+              void analyzeSelectedImage({ forceRefresh: analysisState.status === 'error' });
             }}
           />
         )}
@@ -579,6 +741,8 @@ export default function App() {
             translationHistoryCount={translationHistory.length}
             historyStorageError={historyStorageError}
             onDismissStorageError={() => setHistoryStorageError(null)}
+            usageStats={usageStats}
+            onResetUsageStats={handleResetUsageStats}
             onLanguageChange={handleLanguageChange}
             onClearAllLocalHistory={handleClearAllLocalHistory}
             onOpenAbout={() => handleNavigate('about')}

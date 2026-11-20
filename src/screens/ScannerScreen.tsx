@@ -19,6 +19,7 @@ interface ScannerScreenProps {
   strings: AppStrings;
   selectedImage: SelectedScanImage | null;
   isAnalyzing: boolean;
+  quotaCooldownSeconds?: number;
   onImageSelected: (image: SelectedScanImage | null) => void;
   onScanImage: () => void;
 }
@@ -37,6 +38,7 @@ export function ScannerScreen({
   strings,
   selectedImage,
   isAnalyzing,
+  quotaCooldownSeconds = 0,
   onImageSelected,
   onScanImage,
 }: ScannerScreenProps) {
@@ -169,8 +171,8 @@ export function ScannerScreen({
       return;
     }
 
-    // Capture full-resolution camera frame (capped at 1600px on longest edge for memory safety)
-    const maxCaptureDim = 1600;
+    // Capture sharp camera frame capped at 1280px for faster downstream AI compression
+    const maxCaptureDim = 1280;
     const scale = Math.min(1, maxCaptureDim / Math.max(video.videoWidth, video.videoHeight));
     const width = Math.round(video.videoWidth * scale);
     const height = Math.round(video.videoHeight * scale);
@@ -208,7 +210,7 @@ export function ScannerScreen({
         });
       },
       'image/jpeg',
-      0.9
+      0.85
     );
   };
 
@@ -254,7 +256,8 @@ export function ScannerScreen({
     setFeedback('none');
   };
 
-  const canScan = selectedImage !== null && !imageLoadFailed && !isAnalyzing;
+  const canScan =
+    selectedImage !== null && !imageLoadFailed && !isAnalyzing && quotaCooldownSeconds === 0;
 
   const selectedCaption =
     selectedImage && !imageLoadFailed
@@ -411,10 +414,20 @@ export function ScannerScreen({
           ) : (
             <>
               <ScanLine className="w-5 h-5 shrink-0" aria-hidden="true" />
-              <span className="whitespace-nowrap">{strings.scannerScanButton}</span>
+              <span className="whitespace-nowrap">
+                {quotaCooldownSeconds > 0
+                  ? `${strings.scannerScanButton} (${quotaCooldownSeconds}s)`
+                  : strings.scannerScanButton}
+              </span>
             </>
           )}
         </button>
+
+        {quotaCooldownSeconds > 0 && (
+          <p role="status" className="text-xs text-amber-700 leading-relaxed">
+            {strings.aiQuotaCooldownHint} ({quotaCooldownSeconds}s)
+          </p>
+        )}
       </section>
 
       {/* Safe Cancellation, Error & Honest AI-Readiness Notices */}

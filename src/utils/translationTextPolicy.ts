@@ -6,7 +6,7 @@ import {
 } from '../data/translatorLanguages.ts';
 
 export const MAX_TRANSLATION_INPUT_CHARS = 5000;
-export const TRANSLATION_CHUNK_SIZE_CHARS = 1800;
+export const TRANSLATION_CHUNK_SIZE_CHARS = 3500;
 
 export type TranslationTextValidation =
   | { status: 'empty' }

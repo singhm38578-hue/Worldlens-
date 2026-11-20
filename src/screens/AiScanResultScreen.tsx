@@ -10,6 +10,7 @@ interface AiScanResultScreenProps {
   strings: AppStrings;
   selectedImage: SelectedScanImage | null;
   analysisState: AiAnalysisState;
+  quotaCooldownSeconds?: number;
   onBack: () => void;
   onTryAgain: () => void;
 }
@@ -51,6 +52,7 @@ export function AiScanResultScreen({
   strings,
   selectedImage,
   analysisState,
+  quotaCooldownSeconds = 0,
   onBack,
   onTryAgain,
 }: AiScanResultScreenProps) {
@@ -101,24 +103,28 @@ export function AiScanResultScreen({
         {/* Right: Loading / Real Gemini Response / Error Card */}
         <section className="lg:col-span-7">
           {(analysisState.status === 'idle' ||
-            analysisState.status === 'loading') && (
-            <div
-              role="status"
-              aria-live="polite"
-              className="rounded-3xl bg-white border border-slate-200/90 px-6 py-14 text-center"
-            >
-              <Loader2
-                className="w-9 h-9 text-[#1A6BFF] animate-spin mx-auto"
-                aria-hidden="true"
-              />
-              <h2 className="mt-5 text-lg font-bold text-[#071428]">
-                {strings.aiLoadingTitle}
-              </h2>
-              <p className="mt-2 text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
-                {strings.aiLoadingBody}
-              </p>
-            </div>
-          )}
+            analysisState.status === 'loading') && (() => {
+            const isCompressing =
+              analysisState.status === 'loading' && analysisState.stage === 'compressing';
+            return (
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-3xl bg-white border border-slate-200/90 px-6 py-14 text-center"
+              >
+                <Loader2
+                  className="w-9 h-9 text-[#1A6BFF] animate-spin mx-auto"
+                  aria-hidden="true"
+                />
+                <h2 className="mt-5 text-lg font-bold text-[#071428]">
+                  {isCompressing ? strings.aiCompressingTitle : strings.aiLoadingTitle}
+                </h2>
+                <p className="mt-2 text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
+                  {isCompressing ? strings.aiCompressingBody : strings.aiLoadingBody}
+                </p>
+              </div>
+            );
+          })()}
 
           {analysisState.status === 'success' && (() => {
             const { report } = analysisState;
@@ -137,6 +143,9 @@ export function AiScanResultScreen({
                   <p className="text-xs font-semibold text-[#1A6BFF]">
                     {report.category} · {confidenceLabel} · {analysisState.modelName}
                   </p>
+                  {analysisState.cached && (
+                    <p className="text-xs text-slate-500">{strings.aiCachedResultBadge}</p>
+                  )}
                   <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-[#071428]">
                     {report.objectName}
                   </h2>
@@ -193,11 +202,16 @@ export function AiScanResultScreen({
                 <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row gap-3">
                   <button
                     type="button"
+                    disabled={quotaCooldownSeconds > 0}
                     onClick={onTryAgain}
-                    className="flex-1 min-h-[48px] px-5 rounded-xl bg-white border border-slate-200 hover:border-[#1A6BFF]/60 text-[#071428] text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A6BFF]"
+                    className="flex-1 min-h-[48px] px-5 rounded-xl bg-white border border-slate-200 hover:border-[#1A6BFF]/60 disabled:opacity-50 disabled:cursor-not-allowed text-[#071428] text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A6BFF]"
                   >
                     <RefreshCw className="w-4 h-4 text-[#1A6BFF] shrink-0" aria-hidden="true" />
-                    <span>{strings.aiTryAgain}</span>
+                    <span>
+                      {quotaCooldownSeconds > 0
+                        ? `${strings.aiTryAgain} (${quotaCooldownSeconds}s)`
+                        : strings.aiTryAgain}
+                    </span>
                   </button>
                   <button
                     type="button"
@@ -238,14 +252,25 @@ export function AiScanResultScreen({
                   </div>
                 </div>
 
+                {quotaCooldownSeconds > 0 && analysisState.errorType === 'QUOTA_EXCEEDED' && (
+                  <p className="text-xs font-medium text-amber-700 leading-relaxed">
+                    {strings.aiQuotaCooldownHint} ({quotaCooldownSeconds}s)
+                  </p>
+                )}
+
                 <div className="pt-3 flex flex-col sm:flex-row gap-3">
                   <button
                     type="button"
+                    disabled={quotaCooldownSeconds > 0}
                     onClick={onTryAgain}
-                    className="flex-1 min-h-[48px] px-5 rounded-xl bg-[#1A6BFF] hover:bg-[#1258DB] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A6BFF] focus-visible:ring-offset-2"
+                    className="flex-1 min-h-[48px] px-5 rounded-xl bg-[#1A6BFF] hover:bg-[#1258DB] disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A6BFF] focus-visible:ring-offset-2"
                   >
                     <RefreshCw className="w-4 h-4 shrink-0" aria-hidden="true" />
-                    <span>{strings.aiTryAgain}</span>
+                    <span>
+                      {quotaCooldownSeconds > 0
+                        ? `${strings.aiTryAgain} (${quotaCooldownSeconds}s)`
+                        : strings.aiTryAgain}
+                    </span>
                   </button>
                   <button
                     type="button"

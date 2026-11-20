@@ -30,6 +30,7 @@ export interface TextTranslationOutput {
   detectedSourceLanguage: string;
   targetLanguageName: string;
   modelName: string;
+  cached?: boolean;
 }
 
 export interface CameraTranslationOutput {
@@ -40,6 +41,7 @@ export interface CameraTranslationOutput {
   readabilityNote: string | null;
   targetLanguageName: string;
   modelName: string;
+  cached?: boolean;
 }
 
 export interface ConversationTurn {
@@ -119,17 +121,19 @@ export interface LocalScanHistoryItem {
 
 export type AiAnalysisState =
   | { status: 'idle' }
-  | { status: 'loading' }
+  | { status: 'loading'; stage?: 'compressing' | 'analyzing' }
   | {
       status: 'success';
       report: VisualRecognitionReport;
       modelName: string;
       language: AppLanguage;
+      cached?: boolean;
     }
   | {
       status: 'error';
       errorType: ScanAnalysisError;
       detail?: string;
+      retryAfterSeconds?: number;
     };
 
 export interface LocalizedText {
