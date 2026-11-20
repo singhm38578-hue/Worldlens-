@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Private app-cache directory for temporary full-resolution camera captures.
+         Never stored in shared external storage and deleted automatically on retake/remove. -->
+    <cache-path
+        name="camera_captures"
+        path="camera_captures/" />
+</paths>

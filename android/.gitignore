@@ -1,0 +1,19 @@
+# Android project-local gitignore (protects signing credentials & Firebase configs
+# even if /android is opened standalone in Android Studio)
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# Release signing & private credentials — NEVER commit
+keystore.properties
+*.jks
+*.keystore
+*.p12
+app/google-services.json

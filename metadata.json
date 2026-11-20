@@ -1,0 +1,6 @@
+{
+  "name": "WORLDLENS",
+  "description": "See the World. Understand Everything. Interactive mobile-first MVP prototype and native Android Jetpack Compose foundation for an AI visual intelligence platform.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,19 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Android release secrets, keystores, and Gradle build outputs
+android/keystore.properties
+android/local.properties
+android/app/google-services.json
+android/.gradle/
+android/build/
+android/app/build/
+*.jks
+*.keystore
+
