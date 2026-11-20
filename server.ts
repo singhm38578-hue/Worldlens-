@@ -1,14 +1,16 @@
 import 'dotenv/config';
 import express, { type Request, type Response } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel, Type, type GenerateContentResponse } from '@google/genai';
-import { validateTranslationInput } from './src/utils/translationTextPolicy';
+import { validateTranslationInput } from './src/utils/translationTextPolicy.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.PORT) || 3000;
+const parsedPort = Number.parseInt(process.env.PORT ?? '', 10);
+const PORT = Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : 3000;
 const GEMINI_VISION_MODEL = 'gemini-4-hydrogen';
 
 const WORLDLENS_SYSTEM_INSTRUCTION =
@@ -147,6 +149,10 @@ async function startServer() {
 
   // Cap payload safely to support resized 1024px base64 images without memory abuse
   app.use(express.json({ limit: '6mb' }));
+  app.get('/health', (_req: Request, res: Response) => {
+    res.status(200).json({ status: 'ok' });
+  });
+
   app.use('/api', (_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -570,7 +576,14 @@ ${chunk}`;
     }
   });
 
-  if (process.env.NODE_ENV !== 'production') {
+  const distPath = path.resolve(__dirname, 'dist');
+  const distIndexPath = path.join(distPath, 'index.html');
+  const hasDistBuild = fs.existsSync(distIndexPath);
+  const useViteDevMiddleware =
+    process.env.NODE_ENV === 'development' ||
+    (process.env.NODE_ENV !== 'production' && !hasDistBuild);
+
+  if (useViteDevMiddleware) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -578,10 +591,13 @@ ${chunk}`;
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      if (fs.existsSync(distIndexPath)) {
+        res.sendFile(distIndexPath);
+        return;
+      }
+      res.status(503).send('WorldLens frontend build (dist/index.html) not found.');
     });
   }
 

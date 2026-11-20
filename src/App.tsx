@@ -28,6 +28,19 @@ import {
   saveScanHistoryItem,
   saveTranslationHistoryItem,
 } from './data/localHistoryStore';
+import {
+  clearAllCloudScans,
+  clearAllCloudTranslations,
+  deleteCloudScan,
+  deleteCloudTranslation,
+  saveCloudScan,
+  saveCloudTranslation,
+  subscribeToUserProfile,
+  subscribeToUserScans,
+  subscribeToUserTranslations,
+  updateUserLanguagePreference,
+} from './data/firestoreHistoryService';
+import { useFirebaseAuth } from './context/FirebaseContext';
 import { createSafeThumbnailDataUrl, decodeAndResizeImageUri } from './utils/imageEncoder';
 import { AppShell } from './components/AppShell';
 import { AndroidSourceModal } from './components/AndroidSourceModal';
@@ -50,6 +63,16 @@ const VALID_ERROR_TYPES = new Set<ScanAnalysisError>([
 ]);
 
 export default function App() {
+  const {
+    user,
+    authReady,
+    isSigningIn,
+    authError,
+    signInWithGoogle,
+    signOutUser,
+    clearAuthError,
+  } = useFirebaseAuth();
+
   const [language, setLanguage] = useState<AppLanguage>(() => loadAppLanguage());
   const [isOnline, setIsOnline] = useState<boolean>(() =>
     typeof navigator === 'undefined' ? true : navigator.onLine
@@ -58,9 +81,15 @@ export default function App() {
   const [previousScreen, setPreviousScreen] = useState<ScreenRoute>('home');
   const [selectedImage, setSelectedImage] = useState<SelectedScanImage | null>(null);
   const [analysisState, setAnalysisState] = useState<AiAnalysisState>({ status: 'idle' });
-  const [scanHistory, setScanHistory] = useState<LocalScanHistoryItem[]>(() => loadScanHistory());
-  const [translationHistory, setTranslationHistory] = useState<LocalTranslationRecord[]>(() =>
-    loadTranslationHistory()
+  const [localScanHistory, setLocalScanHistory] = useState<LocalScanHistoryItem[]>(() =>
+    loadScanHistory()
+  );
+  const [localTranslationHistory, setLocalTranslationHistory] = useState<LocalTranslationRecord[]>(
+    () => loadTranslationHistory()
+  );
+  const [cloudScanHistory, setCloudScanHistory] = useState<LocalScanHistoryItem[]>([]);
+  const [cloudTranslationHistory, setCloudTranslationHistory] = useState<LocalTranslationRecord[]>(
+    []
   );
   const [historyStorageError, setHistoryStorageError] = useState<string | null>(null);
   const [prefillTranslation, setPrefillTranslation] = useState<LocalTranslationRecord | null>(null);
@@ -68,12 +97,70 @@ export default function App() {
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const isSignedIn = Boolean(authReady && user);
+  const scanHistory = isSignedIn ? cloudScanHistory : localScanHistory;
+  const translationHistory = isSignedIn ? cloudTranslationHistory : localTranslationHistory;
+
   const strings = STRINGS[language];
 
-  const handleLanguageChange = useCallback((nextLanguage: AppLanguage) => {
-    const saved = saveAppLanguage(nextLanguage);
-    setLanguage(saved);
-  }, []);
+  // Attach Firestore real-time listeners strictly after authentication is confirmed
+  useEffect(() => {
+    if (!authReady || !user) {
+      setCloudScanHistory([]);
+      setCloudTranslationHistory([]);
+      return;
+    }
+
+    const handleSyncError = () => {
+      setHistoryStorageError(STRINGS[loadAppLanguage()].settingsCloudSyncErrorNotice);
+    };
+
+    const unsubProfile = subscribeToUserProfile(
+      user.uid,
+      (profile) => {
+        if (profile) {
+          const saved = saveAppLanguage(profile.preferredLanguage);
+          setLanguage(saved);
+        }
+      },
+      handleSyncError
+    );
+
+    const unsubScans = subscribeToUserScans(
+      user.uid,
+      (items) => {
+        setCloudScanHistory(items);
+      },
+      handleSyncError
+    );
+
+    const unsubTranslations = subscribeToUserTranslations(
+      user.uid,
+      (items) => {
+        setCloudTranslationHistory(items);
+      },
+      handleSyncError
+    );
+
+    return () => {
+      unsubProfile();
+      unsubScans();
+      unsubTranslations();
+    };
+  }, [authReady, user]);
+
+  const handleLanguageChange = useCallback(
+    (nextLanguage: AppLanguage) => {
+      const saved = saveAppLanguage(nextLanguage);
+      setLanguage(saved);
+      if (user) {
+        void updateUserLanguagePreference(user, saved).catch(() => {
+          setHistoryStorageError(STRINGS[saved].settingsCloudSyncErrorNotice);
+        });
+      }
+    },
+    [user]
+  );
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -124,61 +211,119 @@ export default function App() {
   };
 
   const handleReloadHistory = useCallback(() => {
+    if (isSignedIn) {
+      setHistoryStorageError(null);
+      return;
+    }
     let nextError: string | null = null;
     const captureErr = (reason: string) => {
       if (!nextError) nextError = reason;
     };
-    setScanHistory(loadScanHistory(undefined, captureErr));
-    setTranslationHistory(loadTranslationHistory(undefined, captureErr));
+    setLocalScanHistory(loadScanHistory(undefined, captureErr));
+    setLocalTranslationHistory(loadTranslationHistory(undefined, captureErr));
     setHistoryStorageError(nextError);
-  }, []);
+  }, [isSignedIn]);
 
-  const handleDeleteScan = useCallback((id: string) => {
-    let err: string | null = null;
-    setScanHistory(deleteScanHistoryItem(id, undefined, (reason) => { err = reason; }));
-    setHistoryStorageError(err);
-  }, []);
+  const handleDeleteScan = useCallback(
+    (id: string) => {
+      if (user) {
+        setHistoryStorageError(null);
+        void deleteCloudScan(user.uid, id).catch(() => {
+          setHistoryStorageError(strings.settingsCloudSyncErrorNotice);
+        });
+        return;
+      }
+      let err: string | null = null;
+      setLocalScanHistory(deleteScanHistoryItem(id, undefined, (reason) => { err = reason; }));
+      setHistoryStorageError(err);
+    },
+    [strings.settingsCloudSyncErrorNotice, user]
+  );
 
   const handleClearAllScans = useCallback(() => {
+    if (user) {
+      setHistoryStorageError(null);
+      const ids = cloudScanHistory.map((item) => item.id);
+      void clearAllCloudScans(user.uid, ids).catch(() => {
+        setHistoryStorageError(strings.settingsCloudSyncErrorNotice);
+      });
+      return;
+    }
     let err: string | null = null;
-    setScanHistory(clearScanHistory(undefined, (reason) => { err = reason; }));
+    setLocalScanHistory(clearScanHistory(undefined, (reason) => { err = reason; }));
     setHistoryStorageError(err);
-  }, []);
+  }, [cloudScanHistory, strings.settingsCloudSyncErrorNotice, user]);
 
   const handleSaveTranslation = useCallback(
     (record: Omit<LocalTranslationRecord, 'id' | 'timestamp'>) => {
+      if (user) {
+        setHistoryStorageError(null);
+        void saveCloudTranslation(user, record, language).catch(() => {
+          setHistoryStorageError(strings.settingsCloudSyncErrorNotice);
+        });
+        return;
+      }
       let err: string | null = null;
-      setTranslationHistory(
+      setLocalTranslationHistory(
         saveTranslationHistoryItem(record, undefined, (reason) => { err = reason; })
       );
       setHistoryStorageError(err);
     },
-    []
+    [language, strings.settingsCloudSyncErrorNotice, user]
   );
 
-  const handleDeleteTranslation = useCallback((id: string) => {
-    let err: string | null = null;
-    setTranslationHistory(
-      deleteTranslationHistoryItem(id, undefined, (reason) => { err = reason; })
-    );
-    setHistoryStorageError(err);
-  }, []);
+  const handleDeleteTranslation = useCallback(
+    (id: string) => {
+      if (user) {
+        setHistoryStorageError(null);
+        void deleteCloudTranslation(user.uid, id).catch(() => {
+          setHistoryStorageError(strings.settingsCloudSyncErrorNotice);
+        });
+        return;
+      }
+      let err: string | null = null;
+      setLocalTranslationHistory(
+        deleteTranslationHistoryItem(id, undefined, (reason) => { err = reason; })
+      );
+      setHistoryStorageError(err);
+    },
+    [strings.settingsCloudSyncErrorNotice, user]
+  );
 
   const handleClearAllTranslations = useCallback(() => {
+    if (user) {
+      setHistoryStorageError(null);
+      const ids = cloudTranslationHistory.map((item) => item.id);
+      void clearAllCloudTranslations(user.uid, ids).catch(() => {
+        setHistoryStorageError(strings.settingsCloudSyncErrorNotice);
+      });
+      return;
+    }
     let err: string | null = null;
-    setTranslationHistory(clearTranslationHistory(undefined, (reason) => { err = reason; }));
+    setLocalTranslationHistory(clearTranslationHistory(undefined, (reason) => { err = reason; }));
     setHistoryStorageError(err);
-  }, []);
+  }, [cloudTranslationHistory, strings.settingsCloudSyncErrorNotice, user]);
 
   const handleClearAllLocalHistory = useCallback(() => {
     let err: string | null = null;
     const captureErr = (reason: string) => {
       if (!err) err = reason;
     };
-    setScanHistory(clearScanHistory(undefined, captureErr));
-    setTranslationHistory(clearTranslationHistory(undefined, captureErr));
+    setLocalScanHistory(clearScanHistory(undefined, captureErr));
+    setLocalTranslationHistory(clearTranslationHistory(undefined, captureErr));
     setHistoryStorageError(err);
-  }, []);
+
+    if (user) {
+      const scanIds = cloudScanHistory.map((item) => item.id);
+      const trIds = cloudTranslationHistory.map((item) => item.id);
+      void Promise.all([
+        clearAllCloudScans(user.uid, scanIds),
+        clearAllCloudTranslations(user.uid, trIds),
+      ]).catch(() => {
+        setHistoryStorageError(strings.settingsCloudSyncErrorNotice);
+      });
+    }
+  }, [cloudScanHistory, cloudTranslationHistory, strings.settingsCloudSyncErrorNotice, user]);
 
   const handleReuseTranslation = useCallback((record: LocalTranslationRecord) => {
     setPrefillTranslation(record);
@@ -278,27 +423,40 @@ export default function App() {
         language,
       });
 
-      // Persist structured scan result + optional compact local thumbnail strictly on-device
-      const safeThumbnail = await createSafeThumbnailDataUrl(selectedImage.uri).catch(
-        () => undefined
-      );
-      let saveErr: string | null = null;
-      setScanHistory(
-        saveScanHistoryItem(
-          {
-            report: payload.report,
-            language,
-            modelName: resolvedModel,
-            sourceLabel: selectedImage.source,
-            thumbnailDataUrl: safeThumbnail,
-          },
-          undefined,
-          (reason) => {
-            saveErr = reason;
-          }
-        )
-      );
-      setHistoryStorageError(saveErr);
+      if (user) {
+        // Save text-only scan report privately to Cloud Firestore (never uploads photo bytes)
+        setHistoryStorageError(null);
+        void saveCloudScan(user, {
+          report: payload.report,
+          language,
+          modelName: resolvedModel,
+          sourceLabel: selectedImage.source,
+        }).catch(() => {
+          setHistoryStorageError(strings.settingsCloudSyncErrorNotice);
+        });
+      } else {
+        // Guest Mode: persist structured scan result + optional compact local thumbnail strictly on-device
+        const safeThumbnail = await createSafeThumbnailDataUrl(selectedImage.uri).catch(
+          () => undefined
+        );
+        let saveErr: string | null = null;
+        setLocalScanHistory(
+          saveScanHistoryItem(
+            {
+              report: payload.report,
+              language,
+              modelName: resolvedModel,
+              sourceLabel: selectedImage.source,
+              thumbnailDataUrl: safeThumbnail,
+            },
+            undefined,
+            (reason) => {
+              saveErr = reason;
+            }
+          )
+        );
+        setHistoryStorageError(saveErr);
+      }
     } catch (err) {
       if (controller.signal.aborted) return;
       const isNetworkError = err instanceof TypeError;
@@ -308,7 +466,7 @@ export default function App() {
         detail: err instanceof Error ? err.message : undefined,
       });
     }
-  }, [language, selectedImage]);
+  }, [language, selectedImage, strings.settingsCloudSyncErrorNotice, user]);
 
   if (screen === 'splash') {
     return (
@@ -386,6 +544,7 @@ export default function App() {
           <HistoryScreen
             language={language}
             strings={strings}
+            isSignedIn={isSignedIn}
             scanHistory={scanHistory}
             translationHistory={translationHistory}
             storageError={historyStorageError}
@@ -405,6 +564,17 @@ export default function App() {
           <ProfileScreen
             language={language}
             strings={strings}
+            user={user}
+            authReady={authReady}
+            isSigningIn={isSigningIn}
+            authError={authError}
+            onSignInWithGoogle={() => {
+              void signInWithGoogle();
+            }}
+            onSignOut={() => {
+              void signOutUser();
+            }}
+            onDismissAuthError={clearAuthError}
             scanHistoryCount={scanHistory.length}
             translationHistoryCount={translationHistory.length}
             historyStorageError={historyStorageError}
@@ -429,6 +599,7 @@ export default function App() {
           <PrivacyPolicyScreen
             language={language}
             strings={strings}
+            isSignedIn={isSignedIn}
             scanHistoryCount={scanHistory.length}
             translationHistoryCount={translationHistory.length}
             onClearAllLocalHistory={handleClearAllLocalHistory}

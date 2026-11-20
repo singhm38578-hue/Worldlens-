@@ -6,6 +6,7 @@ import type { AppStrings } from '../data/localization';
 interface PrivacyPolicyScreenProps {
   language: AppLanguage;
   strings: AppStrings;
+  isSignedIn?: boolean;
   scanHistoryCount: number;
   translationHistoryCount: number;
   onClearAllLocalHistory: () => void;
@@ -15,6 +16,7 @@ interface PrivacyPolicyScreenProps {
 export function PrivacyPolicyScreen({
   language,
   strings,
+  isSignedIn = false,
   scanHistoryCount,
   translationHistoryCount,
   onClearAllLocalHistory,
@@ -43,13 +45,19 @@ export function PrivacyPolicyScreen({
     },
   ];
 
-  const currentCountLine =
-    language === 'hi'
+  const currentCountLine = isSignedIn
+    ? language === 'hi'
+      ? `आपके Firebase खाते में सिंक: ${scanHistoryCount} स्कैन और ${translationHistoryCount} अनुवाद (केवल टेक्स्ट)।`
+      : `Currently synced to your Firebase account: ${scanHistoryCount} scans and ${translationHistoryCount} translations (text-only).`
+    : language === 'hi'
       ? `इस डिवाइस पर अभी ${scanHistoryCount} स्कैन और ${translationHistoryCount} अनुवाद सहेजे गए हैं।`
       : `Currently stored on this device: ${scanHistoryCount} scans and ${translationHistoryCount} translations.`;
 
-  const clearConfirmBody =
-    language === 'hi'
+  const clearConfirmBody = isSignedIn
+    ? language === 'hi'
+      ? `यह आपके Firebase खाते और इस डिवाइस दोनों से सभी ${scanHistoryCount} सहेजे गए स्कैन और ${translationHistoryCount} सहेजे गए अनुवादों को स्थायी रूप से हटा देगा। इसे पूर्ववत नहीं किया जा सकता।`
+      : `This will permanently delete all ${scanHistoryCount} saved scans and ${translationHistoryCount} saved translations from both your Firebase account and this device. This action cannot be undone.`
+    : language === 'hi'
       ? `यह इस डिवाइस से सभी ${scanHistoryCount} सहेजे गए स्कैन (स्थानीय थंबनेल सहित) और ${translationHistoryCount} सहेजे गए अनुवादों को स्थायी रूप से हटा देगा। इसे पूर्ववत नहीं किया जा सकता।`
       : `This will permanently delete all ${scanHistoryCount} saved scans (including local thumbnails) and ${translationHistoryCount} saved translations from this device. This action cannot be undone.`;
 

@@ -3,14 +3,19 @@ import {
   AlertTriangle,
   Check,
   ChevronRight,
+  Cloud,
+  CloudOff,
   Code2,
   Globe,
   Info,
   Lock,
+  LogIn,
+  LogOut,
   RotateCcw,
   Shield,
   Trash2,
 } from 'lucide-react';
+import type { User } from 'firebase/auth';
 import type { AppLanguage } from '../domain/models';
 import type { AppStrings } from '../data/localization';
 import { APP_BUILD, APP_VERSION } from '../data/localHistoryStore';
@@ -18,6 +23,13 @@ import { APP_BUILD, APP_VERSION } from '../data/localHistoryStore';
 interface ProfileScreenProps {
   language: AppLanguage;
   strings: AppStrings;
+  user: User | null;
+  authReady: boolean;
+  isSigningIn: boolean;
+  authError: string | null;
+  onSignInWithGoogle: () => void;
+  onSignOut: () => void;
+  onDismissAuthError: () => void;
   scanHistoryCount: number;
   translationHistoryCount: number;
   historyStorageError?: string | null;
@@ -33,6 +45,13 @@ interface ProfileScreenProps {
 export function ProfileScreen({
   language,
   strings,
+  user,
+  authReady,
+  isSigningIn,
+  authError,
+  onSignInWithGoogle,
+  onSignOut,
+  onDismissAuthError,
   scanHistoryCount,
   translationHistoryCount,
   historyStorageError,
@@ -47,16 +66,25 @@ export function ProfileScreen({
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [clearedNoticeVisible, setClearedNoticeVisible] = useState(false);
   const totalHistoryCount = scanHistoryCount + translationHistoryCount;
+  const isSignedIn = Boolean(user);
 
-  const historySummary =
-    language === 'hi'
+  const historySummary = isSignedIn
+    ? language === 'hi'
+      ? `क्लाउड में सिंक: ${scanHistoryCount} स्कैन · ${translationHistoryCount} अनुवाद (केवल टेक्स्ट)`
+      : `Synced to your account: ${scanHistoryCount} scans · ${translationHistoryCount} translations (text-only)`
+    : language === 'hi'
       ? `इस डिवाइस पर ${scanHistoryCount} सहेजे गए स्कैन · ${translationHistoryCount} सहेजे गए अनुवाद`
       : `${scanHistoryCount} saved scans · ${translationHistoryCount} saved translations on this device`;
 
-  const clearConfirmBody =
-    language === 'hi'
+  const clearConfirmBody = isSignedIn
+    ? language === 'hi'
+      ? `यह आपके Firebase खाते और इस डिवाइस दोनों से सभी ${scanHistoryCount} सहेजे गए स्कैन और ${translationHistoryCount} सहेजे गए अनुवादों को स्थायी रूप से हटा देगा। इसे पूर्ववत नहीं किया जा सकता।`
+      : `This will permanently delete all ${scanHistoryCount} saved scans and ${translationHistoryCount} saved translations from both your Firebase account and this device. This action cannot be undone.`
+    : language === 'hi'
       ? `यह इस डिवाइस से सभी ${scanHistoryCount} सहेजे गए स्कैन (स्थानीय थंबनेल सहित) और ${translationHistoryCount} सहेजे गए अनुवादों को स्थायी रूप से हटा देगा। इसे पूर्ववत नहीं किया जा सकता।`
       : `This will permanently delete all ${scanHistoryCount} saved scans (including local thumbnails) and ${translationHistoryCount} saved translations from this device. This action cannot be undone.`;
+
+  const userInitial = (user?.displayName || user?.email || 'W').trim().charAt(0).toUpperCase();
 
   return (
     <div className="space-y-6">
@@ -70,8 +98,108 @@ export function ProfileScreen({
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Language Selector, Permissions & Local Storage */}
+        {/* Left Column: Account & Cloud Sync, Language Selector, Permissions & Storage */}
         <div className="lg:col-span-7 space-y-6">
+          {/* 0. Optional Firebase Account & Cloud Sync */}
+          <section className="rounded-3xl bg-white border border-slate-200/90 p-5 sm:p-6 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <div
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    isSignedIn ? 'bg-[#EEF4FF] text-[#1A6BFF]' : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  {isSignedIn ? (
+                    <Cloud className="w-5 h-5" aria-hidden="true" />
+                  ) : (
+                    <CloudOff className="w-5 h-5" aria-hidden="true" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base font-bold text-[#071428]">
+                    {strings.settingsCloudAccountTitle}
+                  </h2>
+                  <p className="text-xs font-medium text-slate-500 mt-0.5">
+                    {isSignedIn ? strings.settingsCloudSignedInBadge : strings.settingsCloudGuestStatus}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {authError && (
+              <div
+                role="alert"
+                className="rounded-2xl bg-red-50 border border-red-200 px-4 py-3 flex items-center justify-between gap-3"
+              >
+                <p className="text-xs sm:text-sm text-red-700">{authError}</p>
+                <button
+                  type="button"
+                  onClick={onDismissAuthError}
+                  className="text-xs font-semibold text-red-700 hover:underline shrink-0"
+                >
+                  {strings.scannerClose}
+                </button>
+              </div>
+            )}
+
+            {isSignedIn && user ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3.5 rounded-2xl bg-[#F6F8FC] border border-slate-200/80 p-3.5">
+                  {user.photoURL ? (
+                    <img
+                      src={user.photoURL}
+                      alt={user.displayName || 'Account avatar'}
+                      referrerPolicy="no-referrer"
+                      className="w-11 h-11 rounded-full object-cover border border-slate-200 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-11 h-11 rounded-full bg-[#1A6BFF] text-white font-bold text-sm flex items-center justify-center shrink-0">
+                      {userInitial}
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#071428] truncate">
+                      {user.displayName || strings.profileGuestName}
+                    </p>
+                    {user.email && (
+                      <p className="text-xs text-slate-500 truncate">{user.email}</p>
+                    )}
+                  </div>
+                </div>
+
+                <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                  {strings.settingsCloudSyncActiveBody}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  className="w-full sm:w-auto min-h-[44px] px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-sm font-semibold text-[#071428] inline-flex items-center justify-center gap-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A6BFF]"
+                >
+                  <LogOut className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span>{strings.settingsCloudSignOutBtn}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                  {strings.settingsCloudGuestBody}
+                </p>
+                <button
+                  type="button"
+                  disabled={!authReady || isSigningIn}
+                  onClick={onSignInWithGoogle}
+                  className="w-full sm:w-auto min-h-[48px] px-5 rounded-xl bg-[#1A6BFF] hover:bg-[#1558D6] disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1A6BFF] focus-visible:ring-offset-2"
+                >
+                  <LogIn className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span>
+                    {isSigningIn ? strings.settingsCloudSigningInBtn : strings.settingsCloudSignInBtn}
+                  </span>
+                </button>
+              </div>
+            )}
+          </section>
+
           {/* 1. Language Selector: English & Hindi */}
           <section className="rounded-3xl bg-white border border-slate-200/90 p-5 sm:p-6 space-y-5">
             <div className="flex items-start gap-3">

@@ -1,0 +1,217 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private profile and preferences for an authenticated WorldLens user.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the profile owner."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 120,
+          "description": "Display name shown in WorldLens settings."
+        },
+        "preferredLanguage": {
+          "type": "string",
+          "enum": ["en", "hi"],
+          "description": "Preferred WorldLens UI and scan response language."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user profile was last updated."
+        }
+      },
+      "required": ["ownerId", "displayName", "preferredLanguage", "createdAt", "updatedAt"]
+    },
+    "ScanRecord": {
+      "title": "ScanRecord",
+      "description": "Structured Gemini visual scan result saved privately for a signed-in user (text metadata only; no private photo bytes stored).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the scan owner."
+        },
+        "objectName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Identified name of the scanned object, plant, animal, product, machine, or place."
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "High-level subject category."
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 3000,
+          "description": "Clear explanation of the identified subject."
+        },
+        "characteristics": {
+          "type": "array",
+          "description": "Bounded list of observable characteristics (max 10 items)."
+        },
+        "usefulFacts": {
+          "type": "array",
+          "description": "Bounded list of useful facts (max 10 items)."
+        },
+        "confidenceLevel": {
+          "type": "string",
+          "enum": ["high", "moderate", "low", "uncertain"],
+          "description": "Model confidence level for the identification."
+        },
+        "confidenceExplanation": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1500,
+          "description": "Honest explanation of identification confidence or uncertainty."
+        },
+        "language": {
+          "type": "string",
+          "enum": ["en", "hi"],
+          "description": "Language of the scan report."
+        },
+        "modelName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Gemini model identifier used for the scan."
+        },
+        "sourceLabel": {
+          "type": "string",
+          "enum": ["camera", "gallery"],
+          "description": "Whether the scanned photo originated from camera capture or gallery picker."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the scan was saved."
+        }
+      },
+      "required": [
+        "ownerId",
+        "objectName",
+        "category",
+        "explanation",
+        "characteristics",
+        "usefulFacts",
+        "confidenceLevel",
+        "confidenceExplanation",
+        "language",
+        "modelName",
+        "sourceLabel",
+        "createdAt"
+      ]
+    },
+    "TranslationRecord": {
+      "title": "TranslationRecord",
+      "description": "Saved AI translation entry belonging privately to a signed-in WorldLens user.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the translation owner."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["text", "camera", "voice", "conversation"],
+          "description": "Translator mode used."
+        },
+        "sourceLanguageCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Source language code (e.g., auto, en, hi)."
+        },
+        "sourceLanguageName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display name of the source or detected language."
+        },
+        "targetLanguageCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Target language code."
+        },
+        "targetLanguageName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display name of the target language."
+        },
+        "sourceText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 5000,
+          "description": "Original input or extracted text."
+        },
+        "translatedText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000,
+          "description": "Gemini translated output text."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the translation was saved."
+        }
+      },
+      "required": [
+        "ownerId",
+        "mode",
+        "sourceLanguageCode",
+        "sourceLanguageName",
+        "targetLanguageCode",
+        "targetLanguageName",
+        "sourceText",
+        "translatedText",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Private user profile and language preference document owned by {userId}."
+    },
+    "/users/{userId}/scans/{scanId}": {
+      "schema": {
+        "$ref": "#/entities/ScanRecord"
+      },
+      "description": "Private text-only AI visual scan history subcollection owned by {userId}."
+    },
+    "/users/{userId}/translations/{translationId}": {
+      "schema": {
+        "$ref": "#/entities/TranslationRecord"
+      },
+      "description": "Private AI translation history subcollection owned by {userId}."
+    }
+  }
+}

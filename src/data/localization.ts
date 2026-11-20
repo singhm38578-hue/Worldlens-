@@ -279,6 +279,17 @@ export interface AppStrings {
   permissionMicBody: string;
   permissionContinue: string;
   permissionNotNow: string;
+
+  settingsCloudAccountTitle: string;
+  settingsCloudGuestStatus: string;
+  settingsCloudGuestBody: string;
+  settingsCloudSignInBtn: string;
+  settingsCloudSigningInBtn: string;
+  settingsCloudSignedInBadge: string;
+  settingsCloudSyncActiveBody: string;
+  settingsCloudSignOutBtn: string;
+  settingsCloudSyncErrorNotice: string;
+  historyCloudSyncNotice: string;
 }
 
 export const STRINGS: Record<AppLanguage, AppStrings> = {
@@ -550,22 +561,22 @@ export const STRINGS: Record<AppLanguage, AppStrings> = {
     privacySection2Title: '2. Sending Images & Text to Gemini AI',
     privacySection2Body:
       'Yes — when you explicitly tap Scan, Translate, or Extract & Translate, your chosen image (resized locally) or text is transmitted over HTTPS (cleartext HTTP is disabled on Android) to Google Gemini AI (via Firebase AI Logic on Android or the server proxy on web). Nothing is sent until you trigger an action. Requests are governed by Google and Firebase terms and privacy policies. Avoid submitting sensitive IDs, financial cards, passwords, or private medical documents.',
-    privacySection3Title: '3. Local History on This Device',
+    privacySection3Title: '3. Local History & Optional Firebase Cloud Sync',
     privacySection3Body:
-      'Completed scan reports (with an optional compact thumbnail when safely available) and translations are saved locally on your device (Room SQLite database with allowBackup=false on Android; browser local storage on web). WorldLens does not upload your history to any personal cloud account or sync server.',
+      'In Guest Mode, completed scan reports (with an optional compact local thumbnail) and translations are saved strictly on your device (browser local storage on web; Room SQLite with allowBackup=false on Android) and are never uploaded.\nIf you optionally sign in with Google in Settings, WorldLens uses Firebase Authentication and Cloud Firestore to sync your language preference, text-only scan reports, and translations privately to your own account. Private camera/gallery photos and image thumbnails are never uploaded to Cloud Firestore.',
     privacySection4Title: '4. Permissions Used Only When Needed',
     privacySection4Body:
       'Camera and gallery access run on demand via system pickers without broad storage permissions. Microphone access is requested only if you tap Speak in Voice or Conversation Translator. Network state is checked only to alert you when offline.',
     privacyStoredHeading: '5. What Is Stored vs. What Is Not',
-    privacyStoredTitle: 'Stored locally on your device',
+    privacyStoredTitle: 'Stored by WorldLens',
     privacyStoredList:
-      '• Selected app language (English or Hindi)\n• Saved scan reports (object name, category, explanation, characteristics, facts, confidence note, language, timestamp)\n• Optional compact local scan thumbnail\n• Saved translations (original text, translated text, languages, mode, timestamp)',
+      '• Selected app language (English or Hindi — local, and synced to Firestore only when signed in)\n• Saved scan reports (object name, category, explanation, characteristics, facts, confidence note, language, timestamp)\n• Optional compact local scan thumbnail (device-only, never uploaded to Firestore)\n• Saved translations (original text, translated text, languages, mode, timestamp)\n• Basic Google account profile (UID and display name) only if you choose to sign in',
     privacyNotStoredTitle: 'Not collected or stored by WorldLens',
     privacyNotStoredList:
-      '• No user account, email, phone number, or password\n• No contacts, SMS, call logs, or GPS location\n• No background camera or background microphone recording\n• No full-resolution photo library scan or cloud history sync\n• No ads, ad SDKs, or third-party advertising trackers',
-    privacyHowToClearTitle: '6. How to Clear Your Local History',
+      '• No account or email required to use WorldLens in Guest Mode\n• No private photos or thumbnails uploaded to Cloud Firestore\n• No contacts, SMS, call logs, or GPS location\n• No background camera or background microphone recording\n• No ads, ad SDKs, or third-party advertising trackers',
+    privacyHowToClearTitle: '6. How to Clear Your History',
     privacyHowToClearBody:
-      'Delete individual entries anytime in the History tab, or clear all saved scans, thumbnails, and translations permanently using the button below or in Settings.',
+      'Delete individual entries anytime in the History tab, or clear all saved scans and translations permanently using the button below or in Settings. When signed in, clearing history removes both your synced Cloud Firestore entries and local device entries.',
 
     offlineBannerTitle: 'No internet connection',
     offlineBannerBody: 'AI scanning and translation require internet access. Your saved local history remains available offline.',
@@ -577,6 +588,19 @@ export const STRINGS: Record<AppLanguage, AppStrings> = {
       'WorldLens uses your microphone only when you tap Speak to convert your voice into text for translation. Audio is never recorded in the background.',
     permissionContinue: 'Continue',
     permissionNotNow: 'Not Now',
+
+    settingsCloudAccountTitle: 'Account & Cloud Sync',
+    settingsCloudGuestStatus: 'Guest Mode (Local only)',
+    settingsCloudGuestBody:
+      'Sign in with Google to privately sync your language preference, text-only scan reports, and translations across sessions using Firebase. Photos are never uploaded to Firestore.',
+    settingsCloudSignInBtn: 'Sign in with Google',
+    settingsCloudSigningInBtn: 'Signing in...',
+    settingsCloudSignedInBadge: 'Cloud Sync active',
+    settingsCloudSyncActiveBody:
+      'Your text-only scan reports, translations, and language preference are privately synced to your Firebase account. Camera and gallery photos remain private on your device.',
+    settingsCloudSignOutBtn: 'Sign Out',
+    settingsCloudSyncErrorNotice: 'Could not sync with Firebase right now. Please check your connection and try again.',
+    historyCloudSyncNotice: 'Synced privately to your Firebase account · Photos are never uploaded to Firestore',
   },
   hi: {
     brandName: 'WORLDLENS',
@@ -846,22 +870,22 @@ export const STRINGS: Record<AppLanguage, AppStrings> = {
     privacySection2Title: '2. Gemini AI को छवियाँ और टेक्स्ट भेजना',
     privacySection2Body:
       'हाँ — जब आप स्पष्ट रूप से स्कैन, अनुवाद या टेक्स्ट निकालें व अनुवाद करें पर टैप करते हैं, तो आपकी चयनित छवि (डिवाइस पर रीसाइज़ की हुई) या टेक्स्ट को केवल HTTPS (Android पर असुरक्षित HTTP अक्षम है) के माध्यम से Google Gemini AI सेवा (Android पर Firebase AI Logic या वेब पर सर्वर प्रॉक्सी) को भेजा जाता है। आपके टैप करने से पहले कुछ भी नहीं भेजा जाता। ये अनुरोध Google और Firebase की सेवा शर्तों व गोपनीयता नीतियों के अधीन हैं। संवेदनशील पहचान पत्र, भुगतान कार्ड या पासवर्ड स्कैन करने से बचें।',
-    privacySection3Title: '3. इस डिवाइस पर स्थानीय इतिहास',
+    privacySection3Title: '3. स्थानीय इतिहास और वैकल्पिक Firebase क्लाउड सिंक',
     privacySection3Body:
-      'पूर्ण स्कैन रिपोर्ट (उपलब्ध होने पर एक छोटे स्थानीय थंबनेल के साथ) और अनुवाद केवल इस डिवाइस पर स्थानीय रूप से सहेजे जाते हैं (Android पर allowBackup=false के साथ Room SQLite डेटाबेस और वेब पर लोकल स्टोरेज)। WorldLens आपका इतिहास किसी क्लाउड खाते पर अपलोड नहीं करता।',
+      'अतिथि मोड में, पूर्ण स्कैन रिपोर्ट (वैकल्पिक छोटे स्थानीय थंबनेल के साथ) और अनुवाद केवल इस डिवाइस पर स्थानीय रूप से सहेजे जाते हैं (वेब पर लोकल स्टोरेज; Android पर allowBackup=false के साथ Room SQLite) और कभी अपलोड नहीं होते।\nयदि आप सेटिंग्स में वैकल्पिक रूप से Google से साइन इन करते हैं, तो WorldLens आपकी भाषा पसंद, केवल टेक्स्ट स्कैन रिपोर्ट और अनुवादों को Firebase Authentication व Cloud Firestore के माध्यम से आपके निजी खाते में सिंक करता है। निजी कैमरा/गैलरी फ़ोटो और थंबनेल कभी Cloud Firestore पर अपलोड नहीं होते।',
     privacySection4Title: '4. केवल आवश्यक होने पर अनुमतियाँ',
     privacySection4Body:
       'कैमरा और गैलरी सिस्टम पिकर के माध्यम से माँग पर चलते हैं। माइक्रोफ़ोन अनुमति केवल वॉइस या संवाद इनपुट शुरू करने पर माँगी जाती है। नेटवर्क स्थिति केवल ऑफ़लाइन होने पर सूचना देने के लिए जाँची जाती है।',
     privacyStoredHeading: '5. क्या सहेजा जाता है और क्या नहीं',
-    privacyStoredTitle: 'केवल इस डिवाइस पर सहेजा जाता है',
+    privacyStoredTitle: 'WorldLens द्वारा सहेजा गया डेटा',
     privacyStoredList:
-      '• चुनी गई ऐप भाषा (अंग्रेज़ी या हिन्दी)\n• सहेजी गई स्कैन रिपोर्ट (वस्तु का नाम, श्रेणी, विवरण, विशेषताएँ, तथ्य, विश्वास नोट, भाषा, दिनांक-समय)\n• वैकल्पिक छोटा स्थानीय स्कैन थंबनेल\n• सहेजे गए अनुवाद (मूल टेक्स्ट, अनुवादित टेक्स्ट, भाषाएँ, मोड, दिनांक-समय)',
+      '• चुनी गई ऐप भाषा (अंग्रेज़ी या हिन्दी — स्थानीय, और साइन इन होने पर Firestore में सिंक)\n• सहेजी गई स्कैन रिपोर्ट (वस्तु का नाम, श्रेणी, विवरण, विशेषताएँ, तथ्य, विश्वास नोट, भाषा, दिनांक-समय)\n• वैकल्पिक छोटा स्थानीय स्कैन थंबनेल (केवल डिवाइस पर, Firestore पर अपलोड नहीं)\n• सहेजे गए अनुवाद (मूल टेक्स्ट, अनुवादित टेक्स्ट, भाषाएँ, मोड, दिनांक-समय)\n• मूल Google खाता प्रोफ़ाइल (UID और नाम) केवल तब जब आप साइन इन चुनें',
     privacyNotStoredTitle: 'WorldLens द्वारा एकत्र या संग्रहीत नहीं किया जाता',
     privacyNotStoredList:
-      '• कोई उपयोगकर्ता खाता, ईमेल, फ़ोन नंबर या पासवर्ड नहीं\n• कोई संपर्क सूची, SMS, कॉल लॉग या GPS लोकेशन नहीं\n• कोई बैकग्राउंड कैमरा या माइक्रोफ़ोन रिकॉर्डिंग नहीं\n• कोई पूर्ण गैलरी स्कैनिंग या क्लाउड इतिहास सिंक नहीं\n• कोई विज्ञापन, विज्ञापन SDK या थर्ड-पार्टी ट्रैकर नहीं',
-    privacyHowToClearTitle: '6. अपना स्थानीय इतिहास कैसे हटाएँ',
+      '• अतिथि मोड के लिए कोई खाता या ईमेल आवश्यक नहीं\n• Cloud Firestore पर कोई निजी फ़ोटो या थंबनेल अपलोड नहीं\n• कोई संपर्क सूची, SMS, कॉल लॉग या GPS लोकेशन नहीं\n• कोई बैकग्राउंड कैमरा या माइक्रोफ़ोन रिकॉर्डिंग नहीं\n• कोई विज्ञापन, विज्ञापन SDK या थर्ड-पार्टी ट्रैकर नहीं',
+    privacyHowToClearTitle: '6. अपना इतिहास कैसे हटाएँ',
     privacyHowToClearBody:
-      'इतिहास टैब में किसी भी रिकॉर्ड को कभी भी हटाएँ, या नीचे दिए गए बटन अथवा सेटिंग्स से सभी सहेजे गए स्कैन, थंबनेल और अनुवाद स्थायी रूप से हटाएँ।',
+      'इतिहास टैब में किसी भी रिकॉर्ड को कभी भी हटाएँ, या नीचे दिए गए बटन अथवा सेटिंग्स से सभी सहेजे गए स्कैन और अनुवाद स्थायी रूप से हटाएँ। साइन इन होने पर, यह आपके Cloud Firestore और स्थानीय डिवाइस दोनों से रिकॉर्ड हटाता है।',
 
     offlineBannerTitle: 'इंटरनेट कनेक्शन नहीं है',
     offlineBannerBody: 'AI स्कैनिंग और अनुवाद के लिए इंटरनेट आवश्यक है। आपका सहेजा गया स्थानीय इतिहास ऑफ़लाइन उपलब्ध रहता है।',
@@ -873,5 +897,18 @@ export const STRINGS: Record<AppLanguage, AppStrings> = {
       'WorldLens आपके माइक्रोफ़ोन का उपयोग केवल तभी करता है जब आप अनुवाद के लिए बोलने हेतु टैप करते हैं। बैकग्राउंड में ऑडियो कभी रिकॉर्ड नहीं होता।',
     permissionContinue: 'जारी रखें',
     permissionNotNow: 'अभी नहीं',
+
+    settingsCloudAccountTitle: 'खाता और क्लाउड सिंक',
+    settingsCloudGuestStatus: 'अतिथि मोड (केवल स्थानीय)',
+    settingsCloudGuestBody:
+      'Firebase के साथ अपनी भाषा पसंद, केवल टेक्स्ट स्कैन रिपोर्ट और अनुवादों को निजी रूप से सिंक करने के लिए Google से साइन इन करें। फ़ोटो कभी Firestore पर अपलोड नहीं होते।',
+    settingsCloudSignInBtn: 'Google से साइन इन करें',
+    settingsCloudSigningInBtn: 'साइन इन हो रहा है...',
+    settingsCloudSignedInBadge: 'क्लाउड सिंक सक्रिय',
+    settingsCloudSyncActiveBody:
+      'आपकी केवल टेक्स्ट स्कैन रिपोर्ट, अनुवाद और भाषा पसंद आपके Firebase खाते में निजी रूप से सिंक हैं। कैमरा और गैलरी फ़ोटो आपके डिवाइस पर ही निजी रहते हैं।',
+    settingsCloudSignOutBtn: 'साइन आउट करें',
+    settingsCloudSyncErrorNotice: 'अभी Firebase के साथ सिंक नहीं हो सका। कृपया इंटरनेट जाँचें और पुनः प्रयास करें।',
+    historyCloudSyncNotice: 'आपके Firebase खाते में निजी रूप से सिंक · फ़ोटो कभी Firestore पर अपलोड नहीं होते',
   },
 };

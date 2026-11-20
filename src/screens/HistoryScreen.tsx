@@ -25,6 +25,7 @@ import { formatHistoryDateTime, formatScanLanguageLabel } from '../data/localHis
 interface HistoryScreenProps {
   language: AppLanguage;
   strings: AppStrings;
+  isSignedIn?: boolean;
   scanHistory: LocalScanHistoryItem[];
   translationHistory: LocalTranslationRecord[];
   storageError?: string | null;
@@ -56,6 +57,7 @@ function getConfidenceLabel(level: VisualConfidenceLevel, strings: AppStrings): 
 export function HistoryScreen({
   language,
   strings,
+  isSignedIn = false,
   scanHistory,
   translationHistory,
   storageError = null,
@@ -119,7 +121,7 @@ export function HistoryScreen({
             {strings.historyTitle}
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            {strings.historyPrivacyNotice}
+            {isSignedIn ? strings.historyCloudSyncNotice : strings.historyPrivacyNotice}
           </p>
         </div>
 

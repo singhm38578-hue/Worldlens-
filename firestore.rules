@@ -1,0 +1,280 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // Global Safety Net: Default-deny all unmatched paths
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Hardened Global Helper Primitives
+    // =========================================================================
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidListItem(arr, idx) {
+      return arr.size() <= idx || (arr[idx] is string && arr[idx].size() >= 1 && arr[idx].size() <= 400);
+    }
+
+    function isBoundedStringList(arr, maxItems) {
+      return arr is list
+        && arr.size() <= maxItems
+        && isValidListItem(arr, 0)
+        && isValidListItem(arr, 1)
+        && isValidListItem(arr, 2)
+        && isValidListItem(arr, 3)
+        && isValidListItem(arr, 4)
+        && isValidListItem(arr, 5)
+        && isValidListItem(arr, 6)
+        && isValidListItem(arr, 7)
+        && isValidListItem(arr, 8)
+        && isValidListItem(arr, 9);
+    }
+
+    function parentUserExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    // =========================================================================
+    // Entity Validation Blueprints (Synchronized with firebase-blueprint.json)
+    // =========================================================================
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['ownerId', 'displayName', 'preferredLanguage', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'displayName', 'preferredLanguage', 'createdAt', 'updatedAt'])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.displayName is string
+        && data.displayName.size() <= 120
+        && data.preferredLanguage is string
+        && data.preferredLanguage in ['en', 'hi']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidScanRecord(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'objectName',
+          'category',
+          'explanation',
+          'characteristics',
+          'usefulFacts',
+          'confidenceLevel',
+          'confidenceExplanation',
+          'language',
+          'modelName',
+          'sourceLabel',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'objectName',
+          'category',
+          'explanation',
+          'characteristics',
+          'usefulFacts',
+          'confidenceLevel',
+          'confidenceExplanation',
+          'language',
+          'modelName',
+          'sourceLabel',
+          'createdAt'
+        ])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.objectName is string
+        && data.objectName.size() >= 1
+        && data.objectName.size() <= 200
+        && data.category is string
+        && data.category.size() >= 1
+        && data.category.size() <= 80
+        && data.explanation is string
+        && data.explanation.size() >= 1
+        && data.explanation.size() <= 3000
+        && isBoundedStringList(data.characteristics, 10)
+        && isBoundedStringList(data.usefulFacts, 10)
+        && data.confidenceLevel is string
+        && data.confidenceLevel in ['high', 'moderate', 'low', 'uncertain']
+        && data.confidenceExplanation is string
+        && data.confidenceExplanation.size() <= 1500
+        && data.language is string
+        && data.language in ['en', 'hi']
+        && data.modelName is string
+        && data.modelName.size() >= 1
+        && data.modelName.size() <= 100
+        && data.sourceLabel is string
+        && data.sourceLabel in ['camera', 'gallery']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidTranslationRecord(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'mode',
+          'sourceLanguageCode',
+          'sourceLanguageName',
+          'targetLanguageCode',
+          'targetLanguageName',
+          'sourceText',
+          'translatedText',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'mode',
+          'sourceLanguageCode',
+          'sourceLanguageName',
+          'targetLanguageCode',
+          'targetLanguageName',
+          'sourceText',
+          'translatedText',
+          'createdAt'
+        ])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.mode is string
+        && data.mode in ['text', 'camera', 'voice', 'conversation']
+        && data.sourceLanguageCode is string
+        && data.sourceLanguageCode.size() >= 1
+        && data.sourceLanguageCode.size() <= 24
+        && data.sourceLanguageName is string
+        && data.sourceLanguageName.size() >= 1
+        && data.sourceLanguageName.size() <= 80
+        && data.targetLanguageCode is string
+        && data.targetLanguageCode.size() >= 1
+        && data.targetLanguageCode.size() <= 24
+        && data.targetLanguageName is string
+        && data.targetLanguageName.size() >= 1
+        && data.targetLanguageName.size() <= 80
+        && data.sourceText is string
+        && data.sourceText.size() >= 1
+        && data.sourceText.size() <= 5000
+        && data.translatedText is string
+        && data.translatedText.size() >= 1
+        && data.translatedText.size() <= 8000
+        && data.createdAt is timestamp;
+    }
+
+    // =========================================================================
+    // Collection: /users/{userId}
+    // =========================================================================
+    match /users/{userId} {
+      // Strictly owner-only PII & preference reads; no collection listing
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredLanguage', 'updatedAt']);
+
+      allow delete: if isVerifiedOwner(userId) && isValidId(userId);
+
+      // =======================================================================
+      // Subcollection: /users/{userId}/scans/{scanId}
+      // =======================================================================
+      match /scans/{scanId} {
+        allow get: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(scanId)
+          && existing().ownerId == request.auth.uid;
+
+        // Secure list query: evaluates resource.data directly without get()/exists()
+        allow list: if isOwner(userId)
+          && isValidId(userId)
+          && existing().ownerId == request.auth.uid;
+
+        // Master Gate: parent /users/{userId} must exist
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(scanId)
+          && isValidScanRecord(incoming(), userId)
+          && incoming().createdAt == request.time
+          && parentUserExists(userId);
+
+        // Scan history records are immutable once written
+        allow update: if false;
+
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(scanId)
+          && existing().ownerId == request.auth.uid;
+      }
+
+      // =======================================================================
+      // Subcollection: /users/{userId}/translations/{translationId}
+      // =======================================================================
+      match /translations/{translationId} {
+        allow get: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(translationId)
+          && existing().ownerId == request.auth.uid;
+
+        // Secure list query: evaluates resource.data directly without get()/exists()
+        allow list: if isOwner(userId)
+          && isValidId(userId)
+          && existing().ownerId == request.auth.uid;
+
+        // Master Gate: parent /users/{userId} must exist
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(translationId)
+          && isValidTranslationRecord(incoming(), userId)
+          && incoming().createdAt == request.time
+          && parentUserExists(userId);
+
+        // Translation history records are immutable once written
+        allow update: if false;
+
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(translationId)
+          && existing().ownerId == request.auth.uid;
+      }
+    }
+  }
+}
